@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from napari_ome_arrow import napari_get_reader
@@ -193,6 +195,64 @@ def test_reader_npy_labels_mode(tmp_path: Path):
 
 
 # --------------------------------------------------------------------- #
+#  OME-Parquet: multi-row grid behavior
+# --------------------------------------------------------------------- #
+
+
+def _struct_columns(path: str) -> list[str]:
+    table = pq.read_table(path)
+    cols = []
+    for name, col in zip(table.column_names, table.columns, strict=False):
+        if pa.types.is_struct(col.type):
+            cols.append(name)
+    return cols
+
+
+def test_reader_parquet_emits_one_layer_per_row():
+    with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
+        path = _p("cytodataframe", "BR00117006.ome.parquet")
+        struct_cols = _struct_columns(path)
+        assert struct_cols, (
+            "Expected at least one struct column in test parquet."
+        )
+
+        reader = napari_get_reader(path)
+        assert callable(reader)
+
+        layers = reader(path)
+
+    table = pq.read_table(path)
+    assert len(layers) == table.num_rows
+    col = struct_cols[0]
+    for idx, (data, add_kwargs, layer_type) in enumerate(layers):
+        assert layer_type == "image"
+        assert isinstance(data, np.ndarray)
+        assert add_kwargs["name"].startswith(
+            f"BR00117006.ome.parquet[{col}][row {idx}]"
+        )
+
+
+def test_reader_parquet_respects_column_override():
+    target_col = "Image_FileName_OrigRNA_OMEArrow_COMP"
+    with (
+        temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "labels"),
+        temporary_env_var("NAPARI_OME_ARROW_PARQUET_COLUMN", target_col),
+    ):
+        path = _p("cytodataframe", "BR00117006.ome.parquet")
+        reader = napari_get_reader(path)
+        assert callable(reader)
+
+        layers = reader(path)
+
+    assert layers, "Expected at least one layer from parquet override."
+    for data, add_kwargs, layer_type in layers:
+        assert layer_type == "labels"
+        assert target_col in add_kwargs["name"]
+        assert "channel_axis" not in add_kwargs
+        assert np.issubdtype(data.dtype, np.integer)
+
+
+# --------------------------------------------------------------------- #
 #  Auto-3D behavior for Z-stacks (no monkeypatch)
 # --------------------------------------------------------------------- #
 
@@ -213,7 +273,12 @@ def test_z_stack_switches_viewer_to_3d():
     napari = pytest.importorskip("napari")
 
     with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
-        viewer = napari.Viewer()
+        try:
+            viewer = napari.Viewer()
+        except ImportError as e:
+            pytest.skip(
+                f"Skipping viewer construction due to dependency error: {e}"
+            )
         try:
             # Start explicitly in 2D
             viewer.dims.ndisplay = 2

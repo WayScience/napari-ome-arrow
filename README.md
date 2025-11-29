@@ -57,6 +57,9 @@ It provides a single, explicit pathway for loading OME-style bioimage data:
   - respects `NAPARI_OME_ARROW_LAYER_TYPE`, and
   - defaults to `"image"` if the variable is not set.
 
+- ✅ **Grid view for multi-row OME-Parquet**
+  When a Parquet file contains multiple OME-Arrow rows, each row is loaded as its own layer and the viewer is switched to napari’s grid mode. Set `NAPARI_OME_ARROW_PARQUET_COLUMN` to pick which image column to visualize.
+
 ______________________________________________________________________
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template] (None).
@@ -106,6 +109,11 @@ NAPARI_OME_ARROW_LAYER_TYPE=image napari my_data.ome.tif
 
 # Load as labels (segmentation)
 NAPARI_OME_ARROW_LAYER_TYPE=labels napari my_labels.ome.parquet
+
+# Pick a specific column in a multi-row OME-Parquet and show in grid mode
+NAPARI_OME_ARROW_LAYER_TYPE=image \\
+NAPARI_OME_ARROW_PARQUET_COLUMN=Image_FileName_OrigDNA_OMEArrow_ORIG \\
+napari tests/data/cytodataframe/BR00117006.ome.parquet
 ```
 
 ## Contributing
