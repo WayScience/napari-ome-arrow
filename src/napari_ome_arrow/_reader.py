@@ -11,6 +11,7 @@ Behavior:
 
 from __future__ import annotations
 
+import math
 import os
 import warnings
 from collections.abc import Sequence
@@ -18,7 +19,9 @@ from pathlib import Path
 from typing import Any, Union
 
 import numpy as np
+import pyarrow as pa
 from ome_arrow.core import OMEArrow
+from ome_arrow.meta import OME_ARROW_STRUCT
 
 PathLike = Union[str, Path]
 LayerData = tuple[np.ndarray, dict[str, Any], str]
@@ -171,6 +174,124 @@ def _looks_like_ome_source(path_str: str) -> bool:
 
 
 # --------------------------------------------------------------------- #
+#  OME-Parquet helpers (multi-row grid)
+# --------------------------------------------------------------------- #
+
+
+def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
+    """Return struct columns matching the OME-Arrow schema."""
+    import pyarrow as pa
+
+    expected_fields = {f.name for f in OME_ARROW_STRUCT}
+    names: list[str] = []
+    for name, col in zip(table.column_names, table.columns, strict=False):
+        if (
+            pa.types.is_struct(col.type)
+            and {f.name for f in col.type} == expected_fields
+        ):
+            names.append(name)
+    return names
+
+
+def _enable_grid(n_layers: int) -> None:
+    """Switch current viewer into grid view when possible."""
+    if n_layers <= 1:
+        return
+    try:
+        import napari
+
+        viewer = napari.current_viewer()
+    except Exception:
+        return
+    if viewer is None:
+        return
+
+    cols = math.ceil(math.sqrt(n_layers))
+    rows = math.ceil(n_layers / cols)
+    try:
+        viewer.grid.enabled = True
+        viewer.grid.shape = (rows, cols)
+    except Exception:
+        # grid is best-effort; ignore if unavailable
+        return
+
+
+def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
+    """
+    Specialized path for multi-row OME-Parquet:
+    create one layer per row and enable napari grid view.
+    """
+    s = src.lower()
+    if not (s.endswith((".ome.parquet", ".parquet", ".pq"))):
+        return None
+
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except Exception:
+        return None
+
+    table = pq.read_table(src)
+    ome_cols = _find_ome_parquet_columns(table)
+    if not ome_cols or table.num_rows <= 1:
+        return None
+
+    override = os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
+    if override:
+        matched = [c for c in ome_cols if c.lower() == override.lower()]
+        selected = matched[0] if matched else ome_cols[0]
+        if not matched:
+            warnings.warn(
+                f"Column '{override}' not found in {Path(src).name}; using {selected!r}.",
+                stacklevel=2,
+            )
+    else:
+        selected = ome_cols[0]
+
+    column = table[selected]
+    layers: list[LayerData] = []
+
+    for idx in range(table.num_rows):
+        try:
+            record = column.slice(idx, 1).to_pylist()[0]
+            scalar = pa.scalar(record, type=OME_ARROW_STRUCT)
+            arr = OMEArrow(scalar).export(
+                how="numpy", dtype=np.uint16, strict=False
+            )
+        except Exception as e:  # pragma: no cover - warn and skip bad rows
+            warnings.warn(
+                f"Skipping row {idx} in column '{selected}': {e}",
+                stacklevel=2,
+            )
+            continue
+
+        add_kwargs: dict[str, Any] = {
+            "name": f"{Path(src).name}[{selected}][row {idx}]"
+        }
+        if mode == "image":
+            if arr.ndim >= 5:
+                add_kwargs["channel_axis"] = 1  # TCZYX
+            elif arr.ndim == 4:
+                add_kwargs["channel_axis"] = 0  # CZYX
+            layer_type = "image"
+        else:
+            if arr.ndim == 5:
+                arr = arr[:, 0, ...]
+            elif arr.ndim == 4:
+                arr = arr[0, ...]
+            arr = _as_labels(arr)
+            add_kwargs.setdefault("opacity", 0.7)
+            layer_type = "labels"
+
+        _maybe_set_viewer_3d(arr)
+        layers.append((arr, add_kwargs, layer_type))
+
+    if layers:
+        _enable_grid(len(layers))
+    return layers or None
+
+
+# --------------------------------------------------------------------- #
 #  napari entry point: napari_get_reader
 # --------------------------------------------------------------------- #
 
@@ -319,6 +440,10 @@ def reader_function(
 
     for src in paths:
         try:
+            parquet_layers = _read_parquet_rows(src, mode)
+            if parquet_layers is not None:
+                layers.extend(parquet_layers)
+                continue
             layers.append(_read_one(src, mode=mode))
         except Exception as e:
             warnings.warn(
