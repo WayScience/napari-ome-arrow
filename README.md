@@ -5,6 +5,7 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/napari-ome-arrow.svg?color=green)](https://python.org)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-ome-arrow)](https://napari-hub.org/plugins/napari-ome-arrow)
 [![npe2](https://img.shields.io/badge/plugin-npe2-blue?link=https://napari.org/stable/plugins/index.html)](https://napari.org/stable/plugins/index.html)
+[![Software DOI badge](https://zenodo.org/badge/DOI/10.5281/zenodo.17613571.svg)](https://doi.org/10.5281/zenodo.17613571)
 
 `napari-ome-arrow` is a minimal plugin for [napari](https://napari.org) that opens image data through the [OME-Arrow](https://github.com/wayscience/ome-arrow) toolkit.
 
