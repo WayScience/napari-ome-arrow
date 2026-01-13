@@ -1,6 +1,6 @@
 """
 Minimal napari reader for OME-Arrow sources (stack patterns, OME-Zarr, OME-Parquet,
-OME-TIFF) plus a fallback .npy example.
+OME-Vortex, OME-TIFF) plus a fallback .npy example.
 
 Behavior:
     * If NAPARI_OME_ARROW_LAYER_TYPE is set to "image" or "labels",
@@ -161,6 +161,11 @@ def _looks_like_ome_source(path_str: str) -> bool:
         ".parquet",
         ".pq",
     }
+    looks_vortex = s.endswith(
+        (".ome.vortex", ".vortex")
+    ) or p.suffix.lower() in {
+        ".vortex",
+    }
     looks_tiff = s.endswith(
         (".ome.tif", ".ome.tiff", ".tif", ".tiff")
     ) or p.suffix.lower() in {
@@ -169,7 +174,12 @@ def _looks_like_ome_source(path_str: str) -> bool:
     }
     looks_npy = s.endswith(".npy")
     return (
-        looks_stack or looks_zarr or looks_parquet or looks_tiff or looks_npy
+        looks_stack
+        or looks_zarr
+        or looks_parquet
+        or looks_vortex
+        or looks_tiff
+        or looks_npy
     )
 
 
@@ -191,6 +201,29 @@ def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
         ):
             names.append(name)
     return names
+
+
+def _read_vortex_scalar(src: str) -> pa.StructScalar:
+    # Delegate Vortex parsing to ome-arrow, which handles the file format details.
+    try:
+        from ome_arrow.ingest import from_ome_vortex
+    except Exception as exc:
+        raise ImportError(
+            "OME-Vortex support requires ome-arrow with vortex support and the "
+            "optional 'vortex' extra (vortex-data). Install with "
+            "'pip install \"napari-ome-arrow[vortex]\"'."
+        ) from exc
+
+    override = os.environ.get(
+        "NAPARI_OME_ARROW_VORTEX_COLUMN"
+    ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
+    # Use a single row from the requested/auto-detected column for OMEArrow.
+    return from_ome_vortex(
+        src,
+        column_name=override or "ome_arrow",
+        row_index=0,
+        strict_schema=False,
+    )
 
 
 def _enable_grid(n_layers: int) -> None:
@@ -337,6 +370,11 @@ def _read_one(src: str, mode: str) -> LayerData:
         ".parquet",
         ".pq",
     }
+    looks_vortex = s.endswith(
+        (".ome.vortex", ".vortex")
+    ) or p.suffix.lower() in {
+        ".vortex",
+    }
     looks_tiff = s.endswith(
         (".ome.tif", ".ome.tiff", ".tif", ".tiff")
     ) or p.suffix.lower() in {
@@ -348,8 +386,19 @@ def _read_one(src: str, mode: str) -> LayerData:
     add_kwargs: dict[str, Any] = {"name": p.name}
 
     # ---- OME-Arrow-backed sources -----------------------------------
-    if looks_stack or looks_zarr or looks_parquet or looks_tiff:
-        obj = OMEArrow(src)
+    if (
+        looks_stack
+        or looks_zarr
+        or looks_parquet
+        or looks_vortex
+        or looks_tiff
+    ):
+        if looks_vortex:
+            # Vortex needs ome-arrow's ingest helper to produce a typed scalar.
+            scalar = _read_vortex_scalar(src)
+            obj = OMEArrow(scalar)
+        else:
+            obj = OMEArrow(src)
         arr = obj.export(how="numpy", dtype=np.uint16)  # TCZYX
         info = obj.info()  # may contain 'shape': (T, C, Z, Y, X)
 

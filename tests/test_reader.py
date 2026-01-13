@@ -252,15 +252,26 @@ def test_reader_parquet_respects_column_override():
         assert np.issubdtype(data.dtype, np.integer)
 
 
+def test_reader_vortex_emits_layers():
+    with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "labels"):
+        path = _p("idr0062A", "6001240_labels.ome.vortex")
+        reader = napari_get_reader(path)
+        assert callable(reader)
+
+        layers = reader(path)
+
+    assert len(layers) == 1
+    data, add_kwargs, layer_type = layers[0]
+    assert layer_type == "labels"
+    assert isinstance(data, np.ndarray)
+    assert add_kwargs["name"] == "6001240_labels.ome.vortex"
+
+
 # --------------------------------------------------------------------- #
 #  Auto-3D behavior for Z-stacks (no monkeypatch)
 # --------------------------------------------------------------------- #
 
 
-@pytest.mark.skipif(
-    "CI" in os.environ and os.environ["CI"].lower() == "true",
-    reason="May require a functional Qt backend; skip in CI by default.",
-)
 def test_z_stack_switches_viewer_to_3d():
     """
     For Z-stacks, the reader should set viewer.dims.ndisplay = 3
