@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import warnings
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Union
@@ -21,6 +23,7 @@ from typing import Any, Union
 import numpy as np
 import pyarrow as pa
 from ome_arrow.core import OMEArrow
+from ome_arrow.ingest import from_stack_pattern_path
 from ome_arrow.meta import OME_ARROW_STRUCT
 
 PathLike = Union[str, Path]
@@ -168,8 +171,33 @@ def _looks_like_ome_source(path_str: str) -> bool:
         ".tiff",
     }
     looks_npy = s.endswith(".npy")
+    looks_dir_stack = False
+    if p.exists() and p.is_dir() and not looks_zarr:
+        try:
+            stack_files = [
+                f
+                for f in p.iterdir()
+                if f.is_file()
+                and f.name.lower().endswith(
+                    (
+                        ".ome.tif",
+                        ".ome.tiff",
+                        ".tif",
+                        ".tiff",
+                        ".npy",
+                    )
+                )
+            ]
+            looks_dir_stack = len(stack_files) > 1
+        except Exception:
+            looks_dir_stack = False
     return (
-        looks_stack or looks_zarr or looks_parquet or looks_tiff or looks_npy
+        looks_stack
+        or looks_zarr
+        or looks_parquet
+        or looks_tiff
+        or looks_npy
+        or looks_dir_stack
     )
 
 
@@ -291,6 +319,119 @@ def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
     return layers or None
 
 
+def _collect_stack_files(
+    paths: Sequence[str],
+) -> tuple[list[Path], Path] | None:
+    """Return stack candidate files and their shared folder, if any."""
+    if any(any(c in p for c in "<>*") for p in paths):
+        return None
+
+    if len(paths) == 1:
+        candidate = Path(paths[0])
+        if (
+            candidate.exists()
+            and candidate.is_dir()
+            and candidate.suffix.lower() not in {".zarr", ".ome.zarr"}
+        ):
+            files = sorted(p for p in candidate.iterdir() if p.is_file())
+            if len(files) > 1:
+                return files, candidate
+        return None
+
+    path_objs = [Path(p) for p in paths]
+    if not all(p.exists() and p.is_file() for p in path_objs):
+        return None
+
+    parents = {p.parent for p in path_objs}
+    if len(parents) != 1:
+        return None
+
+    return sorted(path_objs), parents.pop()
+
+
+def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
+    """Suggest a Bio-Formats-style stack pattern string for files."""
+    if not files:
+        return str(folder / ".*")
+
+    suffix_counts = Counter(p.suffix.lower() for p in files)
+    preferred_suffix = suffix_counts.most_common(1)[0][0] if suffix_counts else ""
+    candidates = [
+        p for p in files if p.suffix.lower() == preferred_suffix
+    ] or list(files)
+    names = [p.name for p in candidates]
+
+    matches = [re.search(r"(\d+)(?!.*\d)", name) for name in names]
+    if all(m is not None for m in matches):
+        prefix = names[0][: matches[0].start()]
+        suffix = names[0][matches[0].end() :]
+        if all(
+            name[: m.start()] == prefix and name[m.end() :] == suffix
+            for name, m in zip(names, matches, strict=False)
+        ):
+            nums = [int(m.group(1)) for m in matches if m is not None]
+            width = max(len(m.group(1)) for m in matches if m is not None)
+            start = str(min(nums)).zfill(width)
+            end = str(max(nums)).zfill(width)
+            pattern_name = f"{prefix}<{start}-{end}>{suffix}"
+            return str(folder / pattern_name)
+
+    common_prefix = os.path.commonprefix(names)
+    common_suffix = os.path.commonprefix([n[::-1] for n in names])[::-1]
+    prefix = re.escape(common_prefix)
+    suffix = re.escape(common_suffix)
+    pattern_name = f"{prefix}.*{suffix}"
+    return str(folder / pattern_name)
+
+
+def _prompt_stack_pattern(
+    files: Sequence[Path], folder: Path
+) -> str | None:
+    """
+    Prompt for a stack pattern when multiple files are detected.
+
+    Returns a pattern string or None to skip stack parsing.
+    """
+    suggested = _suggest_stack_pattern(files, folder)
+
+    try:
+        from qtpy import QtWidgets
+    except Exception:
+        warnings.warn(
+            "Multiple files detected but Qt is not available; "
+            "loading files individually.",
+            stacklevel=2,
+        )
+        return None
+
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        warnings.warn(
+            "Multiple files detected but no QApplication instance; "
+            "loading files individually.",
+            stacklevel=2,
+        )
+        return None
+
+    label = (
+        "Multiple files detected. Enter a stack pattern string to load as a 3D stack.\n"
+        "Use <...> for indices (e.g. z<000-120>), or a regex like .* for non-numbered files.\n"
+        "If no dimension token (z/c/t) is present, Z is assumed for this stack.\n\n"
+        f"Suggested:\n{suggested}\n\n"
+        "Edit if needed and press OK, or Cancel to load files individually."
+    )
+    text, ok = QtWidgets.QInputDialog.getText(
+        None,
+        "napari-ome-arrow: stack pattern",
+        label,
+        text=suggested,
+    )
+    if not ok:
+        return None
+    value = text.strip()
+    return value or None
+
+
 # --------------------------------------------------------------------- #
 #  napari entry point: napari_get_reader
 # --------------------------------------------------------------------- #
@@ -315,10 +456,15 @@ def napari_get_reader(path: Union[PathLike, Sequence[PathLike]]):
 # --------------------------------------------------------------------- #
 
 
-def _read_one(src: str, mode: str) -> LayerData:
+def _read_one(
+    src: str, mode: str, *, stack_default_dim: str | None = None
+) -> LayerData:
     """
     Read a single source into (data, add_kwargs, layer_type),
     obeying `mode` = 'image' or 'labels'.
+
+    If `stack_default_dim` is provided and `src` is a stack pattern,
+    placeholders without explicit tokens will be treated as that dimension.
     """
     s = src.lower()
     p = Path(src)
@@ -349,7 +495,16 @@ def _read_one(src: str, mode: str) -> LayerData:
 
     # ---- OME-Arrow-backed sources -----------------------------------
     if looks_stack or looks_zarr or looks_parquet or looks_tiff:
-        obj = OMEArrow(src)
+        if looks_stack and stack_default_dim is not None:
+            scalar = from_stack_pattern_path(
+                src,
+                default_dim_for_unspecified=stack_default_dim,
+                map_series_to="T",
+                clamp_to_uint16=True,
+            )
+            obj = OMEArrow(scalar)
+        else:
+            obj = OMEArrow(src)
         arr = obj.export(how="numpy", dtype=np.uint16)  # TCZYX
         info = obj.info()  # may contain 'shape': (T, C, Z, Y, X)
 
@@ -431,12 +586,32 @@ def reader_function(
     ]
     layers: list[LayerData] = []
 
-    # Use the first path as context for the dialog label
+    stack_selection = _collect_stack_files(paths)
+    stack_pattern = None
+    if stack_selection is not None:
+        stack_pattern = _prompt_stack_pattern(*stack_selection)
+
+    # Use the original first path as context for the dialog label
     try:
         mode = _get_layer_mode(sample_path=paths[0])  # 'image' or 'labels'
     except RuntimeError as e:
         # If user canceled the dialog, propagate a clean error for napari
         raise ValueError(str(e)) from e
+
+    if stack_pattern is not None:
+        try:
+            layers.append(
+                _read_one(stack_pattern, mode=mode, stack_default_dim="Z")
+            )
+            return layers
+        except Exception as e:
+            warnings.warn(
+                f"Failed to read stack pattern '{stack_pattern}': {e}. "
+                "Loading files individually instead.",
+                stacklevel=2,
+            )
+    elif stack_selection is not None and len(paths) == 1:
+        paths = [str(p) for p in stack_selection[0]]
 
     for src in paths:
         try:

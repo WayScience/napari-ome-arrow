@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from napari_ome_arrow import napari_get_reader
+import napari_ome_arrow._reader as reader_mod
 
 DATA_ROOT = Path("tests/data").resolve()
 
@@ -197,6 +198,72 @@ def test_reader_npy_labels_mode(tmp_path: Path):
 # --------------------------------------------------------------------- #
 #  OME-Parquet: multi-row grid behavior
 # --------------------------------------------------------------------- #
+
+
+def test_reader_prompts_for_stack_pattern_with_multiple_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Multiple files should trigger a stack pattern prompt and use the result.
+    """
+    paths = []
+    for idx in range(3):
+        arr = np.ones((4, 4), dtype=np.uint16) * idx
+        p = tmp_path / f"img_{idx:03d}.npy"
+        np.save(p, arr)
+        paths.append(str(p))
+
+    suggested = str(tmp_path / "img_<000-002>.npy")
+
+    monkeypatch.setattr(reader_mod, "_get_layer_mode", lambda sample_path: "image")
+    monkeypatch.setattr(
+        reader_mod, "_prompt_stack_pattern", lambda files, folder: suggested
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_read_one(src: str, mode: str, *, stack_default_dim: str | None = None):
+        captured["src"] = src
+        captured["mode"] = mode
+        captured["stack_default_dim"] = stack_default_dim
+        data = np.zeros((1, 1, 1, 4, 4), dtype=np.uint16)
+        return data, {"name": "stack"}, "image"
+
+    monkeypatch.setattr(reader_mod, "_read_one", fake_read_one)
+
+    layers = reader_mod.reader_function(paths)
+    assert len(layers) == 1
+    assert captured["src"] == suggested
+    assert captured["mode"] == "image"
+    assert captured["stack_default_dim"] == "Z"
+
+
+def test_reader_stack_pattern_nviz_dataset(monkeypatch: pytest.MonkeyPatch):
+    """
+    Use the nviz artificial dataset with a known pattern string.
+    """
+    pattern = (
+        DATA_ROOT
+        / "nviz-artificial-4d-dataset"
+        / "E99_C<111,222>_ZS<000-021>.tif"
+    )
+    folder = pattern.parent
+    files = sorted(folder.glob("E99_C111_ZS*.tif"))[:2]
+    assert len(files) == 2
+
+    monkeypatch.setattr(
+        reader_mod, "_prompt_stack_pattern", lambda _files, _folder: str(pattern)
+    )
+
+    with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
+        layers = reader_mod.reader_function([str(p) for p in files])
+
+    assert len(layers) == 1
+    data, add_kwargs, layer_type = layers[0]
+    assert layer_type == "image"
+    assert data.ndim >= 3
+    assert data.shape[1] == 2
+    assert data.shape[-3] == 22
 
 
 def _struct_columns(path: str) -> list[str]:
