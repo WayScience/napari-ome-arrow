@@ -226,6 +226,114 @@ def _read_vortex_scalar(src: str) -> pa.StructScalar:
     )
 
 
+def _vortex_row_out_of_range(exc: Exception) -> bool:
+    if isinstance(exc, IndexError):
+        return True
+    msg = str(exc).lower()
+    return "out of range" in msg or ("row_index" in msg and "range" in msg)
+
+
+def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
+    """
+    Specialized path for multi-row OME-Vortex:
+    create one layer per row and enable napari grid view.
+    """
+    s = src.lower()
+    if not (s.endswith((".ome.vortex", ".vortex"))):
+        return None
+
+    try:
+        from ome_arrow.ingest import from_ome_vortex
+    except Exception:
+        return None
+
+    override = os.environ.get(
+        "NAPARI_OME_ARROW_VORTEX_COLUMN"
+    ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
+    selected = override or "ome_arrow"
+
+    try:
+        first = from_ome_vortex(
+            src,
+            column_name=selected,
+            row_index=0,
+            strict_schema=False,
+        )
+    except Exception:
+        return None
+
+    try:
+        second = from_ome_vortex(
+            src,
+            column_name=selected,
+            row_index=1,
+            strict_schema=False,
+        )
+    except Exception:
+        return None
+
+    layers: list[LayerData] = []
+
+    def _append_layer(idx: int, scalar: pa.StructScalar) -> None:
+        try:
+            arr = OMEArrow(scalar).export(
+                how="numpy", dtype=np.uint16, strict=False
+            )
+        except Exception as e:  # pragma: no cover - warn and skip bad rows
+            warnings.warn(
+                f"Skipping row {idx} in column '{selected}': {e}",
+                stacklevel=2,
+            )
+            return
+
+        add_kwargs: dict[str, Any] = {
+            "name": f"{Path(src).name}[{selected}][row {idx}]"
+        }
+        if mode == "image":
+            if arr.ndim >= 5:
+                add_kwargs["channel_axis"] = 1  # TCZYX
+            elif arr.ndim == 4:
+                add_kwargs["channel_axis"] = 0  # CZYX
+            layer_type = "image"
+        else:
+            if arr.ndim == 5:
+                arr = arr[:, 0, ...]
+            elif arr.ndim == 4:
+                arr = arr[0, ...]
+            arr = _as_labels(arr)
+            add_kwargs.setdefault("opacity", 0.7)
+            layer_type = "labels"
+
+        _maybe_set_viewer_3d(arr)
+        layers.append((arr, add_kwargs, layer_type))
+
+    _append_layer(0, first)
+    _append_layer(1, second)
+
+    max_rows = 10000
+    for idx in range(2, max_rows):
+        try:
+            scalar = from_ome_vortex(
+                src,
+                column_name=selected,
+                row_index=idx,
+                strict_schema=False,
+            )
+        except Exception as e:
+            if _vortex_row_out_of_range(e):
+                break
+            warnings.warn(
+                f"Skipping row {idx} in column '{selected}': {e}",
+                stacklevel=2,
+            )
+            continue
+        _append_layer(idx, scalar)
+
+    if layers:
+        _enable_grid(len(layers))
+    return layers or None
+
+
 def _enable_grid(n_layers: int) -> None:
     """Switch current viewer into grid view when possible."""
     if n_layers <= 1:
@@ -492,6 +600,10 @@ def reader_function(
             parquet_layers = _read_parquet_rows(src, mode)
             if parquet_layers is not None:
                 layers.extend(parquet_layers)
+                continue
+            vortex_layers = _read_vortex_rows(src, mode)
+            if vortex_layers is not None:
+                layers.extend(vortex_layers)
                 continue
             layers.append(_read_one(src, mode=mode))
         except Exception as e:

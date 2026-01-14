@@ -88,7 +88,7 @@ pip install git+https://github.com/wayscience/napari-ome-arrow.git
 
 To enable OME-Vortex support via OME-Arrow, install the optional extra:
 
-```
+```bash
 pip install "napari-ome-arrow[vortex]"
 ```
 
