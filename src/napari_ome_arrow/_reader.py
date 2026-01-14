@@ -355,7 +355,9 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
         return str(folder / ".*")
 
     suffix_counts = Counter(p.suffix.lower() for p in files)
-    preferred_suffix = suffix_counts.most_common(1)[0][0] if suffix_counts else ""
+    preferred_suffix = (
+        suffix_counts.most_common(1)[0][0] if suffix_counts else ""
+    )
     candidates = [
         p for p in files if p.suffix.lower() == preferred_suffix
     ] or list(files)
@@ -384,9 +386,7 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
     return str(folder / pattern_name)
 
 
-def _prompt_stack_pattern(
-    files: Sequence[Path], folder: Path
-) -> str | None:
+def _prompt_stack_pattern(files: Sequence[Path], folder: Path) -> str | None:
     """
     Prompt for a stack pattern when multiple files are detected.
 

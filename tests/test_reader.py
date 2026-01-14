@@ -13,8 +13,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from napari_ome_arrow import napari_get_reader
 import napari_ome_arrow._reader as reader_mod
+from napari_ome_arrow import napari_get_reader
 
 DATA_ROOT = Path("tests/data").resolve()
 
@@ -215,14 +215,18 @@ def test_reader_prompts_for_stack_pattern_with_multiple_files(
 
     suggested = str(tmp_path / "img_<000-002>.npy")
 
-    monkeypatch.setattr(reader_mod, "_get_layer_mode", lambda sample_path: "image")
+    monkeypatch.setattr(
+        reader_mod, "_get_layer_mode", lambda sample_path: "image"
+    )
     monkeypatch.setattr(
         reader_mod, "_prompt_stack_pattern", lambda files, folder: suggested
     )
 
     captured: dict[str, object] = {}
 
-    def fake_read_one(src: str, mode: str, *, stack_default_dim: str | None = None):
+    def fake_read_one(
+        src: str, mode: str, *, stack_default_dim: str | None = None
+    ):
         captured["src"] = src
         captured["mode"] = mode
         captured["stack_default_dim"] = stack_default_dim
@@ -252,7 +256,9 @@ def test_reader_stack_pattern_nviz_dataset(monkeypatch: pytest.MonkeyPatch):
     assert len(files) == 2
 
     monkeypatch.setattr(
-        reader_mod, "_prompt_stack_pattern", lambda _files, _folder: str(pattern)
+        reader_mod,
+        "_prompt_stack_pattern",
+        lambda _files, _folder: str(pattern),
     )
 
     with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
