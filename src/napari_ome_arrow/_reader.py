@@ -189,7 +189,7 @@ def _looks_like_ome_source(path_str: str) -> bool:
                 )
             ]
             looks_dir_stack = len(stack_files) > 1
-        except Exception:
+        except OSError:
             looks_dir_stack = False
     return (
         looks_stack
@@ -603,13 +603,14 @@ def reader_function(
             layers.append(
                 _read_one(stack_pattern, mode=mode, stack_default_dim="Z")
             )
-            return layers
         except Exception as e:
             warnings.warn(
                 f"Failed to read stack pattern '{stack_pattern}': {e}. "
                 "Loading files individually instead.",
                 stacklevel=2,
             )
+        else:
+            return layers
     elif stack_selection is not None and len(paths) == 1:
         paths = [str(p) for p in stack_selection[0]]
 
