@@ -14,6 +14,7 @@ It provides a single, explicit pathway for loading OME-style bioimage data:
 - **OME-TIFF** (`.ome.tif`, `.ome.tiff`, `.tif`, `.tiff`)
 - **OME-Zarr** (`.ome.zarr`, `.zarr` stores and URLs)
 - **OME-Parquet** (`.ome.parquet`, `.parquet`, `.pq`)
+- **OME-Vortex** (`.ome.vortex`, `.vortex`)
 - **Bio-Formats–style stack patterns** (paths containing `<`, `>`, or `*`)
 - A simple **`.npy` fallback** for quick testing / ad-hoc arrays
 
@@ -58,8 +59,8 @@ It provides a single, explicit pathway for loading OME-style bioimage data:
   - respects `NAPARI_OME_ARROW_LAYER_TYPE`, and
   - defaults to `"image"` if the variable is not set.
 
-- ✅ **Grid view for multi-row OME-Parquet**
-  When a Parquet file contains multiple OME-Arrow rows, each row is loaded as its own layer and the viewer is switched to napari’s grid mode. Set `NAPARI_OME_ARROW_PARQUET_COLUMN` to pick which image column to visualize.
+- ✅ **Grid view for multi-row OME-Parquet / OME-Vortex**
+  When a Parquet or Vortex file contains multiple OME-Arrow rows, each row is loaded as its own layer and the viewer is switched to napari’s grid mode. Set `NAPARI_OME_ARROW_PARQUET_COLUMN` or `NAPARI_OME_ARROW_VORTEX_COLUMN` to pick which image column to visualize.
 
 ______________________________________________________________________
 
@@ -85,13 +86,19 @@ To install latest development version :
 pip install git+https://github.com/wayscience/napari-ome-arrow.git
 ```
 
+To enable OME-Vortex support via OME-Arrow, install the optional extra:
+
+```bash
+pip install "napari-ome-arrow[vortex]"
+```
+
 ## Usage
 
 ### From the napari GUI
 
 1. Install the plugin (see above).
 1. Start napari.
-1. Drag and drop an OME-TIFF, OME-Zarr, OME-Parquet file, or stack pattern into the viewer.
+1. Drag and drop an OME-TIFF, OME-Zarr, OME-Parquet, OME-Vortex file, or stack pattern into the viewer.
 1. When prompted, choose **Image** or **Labels**.
 
 The plugin will:

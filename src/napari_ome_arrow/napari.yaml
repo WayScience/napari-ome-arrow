@@ -12,6 +12,9 @@ contributions:
         - "*.ome.parquet"
         - "*.parquet"
         - "*.pq"
+        # OME-Vortex
+        - "*.ome.vortex"
+        - "*.vortex"
         # OME-TIFF
         - "*.ome.tif"
         - "*.ome.tiff"

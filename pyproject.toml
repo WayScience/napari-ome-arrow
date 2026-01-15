@@ -29,7 +29,7 @@ dynamic = [ "version" ]
 dependencies = [
   "magicgui",
   "numpy",
-  "ome-arrow>=0.0.2",
+  "ome-arrow>=0.0.3",
   "qtpy>=2.4",
   "scikit-image",
 ]
@@ -39,6 +39,7 @@ optional-dependencies.all = [ "napari", "qtpy>=2.4" ]
 optional-dependencies.pyqt6 = [ "napari[pyqt6]", "pyqt6>=6.6", "qtpy>=2.4" ]
 # Let users choose their Qt backend explicitly:
 optional-dependencies.pyside6 = [ "napari[pyside6]", "pyside6>=6.6", "qtpy>=2.4" ]
+optional-dependencies.vortex = [ "vortex-data" ]
 urls."Bug Tracker" = "https://github.com/wayscience/napari-ome-arrow/issues"
 urls."Documentation" = "https://github.com/wayscience/napari-ome-arrow#README.md"
 urls."Source Code" = "https://github.com/wayscience/napari-ome-arrow"

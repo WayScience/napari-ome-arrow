@@ -1,6 +1,6 @@
 """
 Minimal napari reader for OME-Arrow sources (stack patterns, OME-Zarr, OME-Parquet,
-OME-TIFF) plus a fallback .npy example.
+OME-Vortex, OME-TIFF) plus a fallback .npy example.
 
 Behavior:
     * If NAPARI_OME_ARROW_LAYER_TYPE is set to "image" or "labels",
@@ -164,6 +164,11 @@ def _looks_like_ome_source(path_str: str) -> bool:
         ".parquet",
         ".pq",
     }
+    looks_vortex = s.endswith(
+        (".ome.vortex", ".vortex")
+    ) or p.suffix.lower() in {
+        ".vortex",
+    }
     looks_tiff = s.endswith(
         (".ome.tif", ".ome.tiff", ".tif", ".tiff")
     ) or p.suffix.lower() in {
@@ -195,6 +200,7 @@ def _looks_like_ome_source(path_str: str) -> bool:
         looks_stack
         or looks_zarr
         or looks_parquet
+        or looks_vortex
         or looks_tiff
         or looks_npy
         or looks_dir_stack
@@ -219,6 +225,137 @@ def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
         ):
             names.append(name)
     return names
+
+
+def _read_vortex_scalar(src: str) -> pa.StructScalar:
+    # Delegate Vortex parsing to ome-arrow, which handles the file format details.
+    try:
+        from ome_arrow.ingest import from_ome_vortex
+    except Exception as exc:
+        raise ImportError(
+            "OME-Vortex support requires ome-arrow with vortex support and the "
+            "optional 'vortex' extra (vortex-data). Install with "
+            "'pip install \"napari-ome-arrow[vortex]\"'."
+        ) from exc
+
+    override = os.environ.get(
+        "NAPARI_OME_ARROW_VORTEX_COLUMN"
+    ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
+    # Use a single row from the requested/auto-detected column for OMEArrow.
+    return from_ome_vortex(
+        src,
+        column_name=override or "ome_arrow",
+        row_index=0,
+        strict_schema=False,
+    )
+
+
+def _vortex_row_out_of_range(exc: Exception) -> bool:
+    if isinstance(exc, IndexError):
+        return True
+    msg = str(exc).lower()
+    return "out of range" in msg or ("row_index" in msg and "range" in msg)
+
+
+def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
+    """
+    Specialized path for multi-row OME-Vortex:
+    create one layer per row and enable napari grid view.
+    """
+    s = src.lower()
+    if not (s.endswith((".ome.vortex", ".vortex"))):
+        return None
+
+    try:
+        from ome_arrow.ingest import from_ome_vortex
+    except Exception:
+        return None
+
+    override = os.environ.get(
+        "NAPARI_OME_ARROW_VORTEX_COLUMN"
+    ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
+    selected = override or "ome_arrow"
+
+    try:
+        first = from_ome_vortex(
+            src,
+            column_name=selected,
+            row_index=0,
+            strict_schema=False,
+        )
+    except Exception:
+        return None
+
+    try:
+        second = from_ome_vortex(
+            src,
+            column_name=selected,
+            row_index=1,
+            strict_schema=False,
+        )
+    except Exception:
+        return None
+
+    layers: list[LayerData] = []
+
+    def _append_layer(idx: int, scalar: pa.StructScalar) -> None:
+        try:
+            arr = OMEArrow(scalar).export(
+                how="numpy", dtype=np.uint16, strict=False
+            )
+        except Exception as e:  # pragma: no cover - warn and skip bad rows
+            warnings.warn(
+                f"Skipping row {idx} in column '{selected}': {e}",
+                stacklevel=2,
+            )
+            return
+
+        add_kwargs: dict[str, Any] = {
+            "name": f"{Path(src).name}[{selected}][row {idx}]"
+        }
+        if mode == "image":
+            if arr.ndim >= 5:
+                add_kwargs["channel_axis"] = 1  # TCZYX
+            elif arr.ndim == 4:
+                add_kwargs["channel_axis"] = 0  # CZYX
+            layer_type = "image"
+        else:
+            if arr.ndim == 5:
+                arr = arr[:, 0, ...]
+            elif arr.ndim == 4:
+                arr = arr[0, ...]
+            arr = _as_labels(arr)
+            add_kwargs.setdefault("opacity", 0.7)
+            layer_type = "labels"
+
+        _maybe_set_viewer_3d(arr)
+        layers.append((arr, add_kwargs, layer_type))
+
+    _append_layer(0, first)
+    _append_layer(1, second)
+
+    max_rows = 10000
+    for idx in range(2, max_rows):
+        try:
+            scalar = from_ome_vortex(
+                src,
+                column_name=selected,
+                row_index=idx,
+                strict_schema=False,
+            )
+        except Exception as e:
+            if _vortex_row_out_of_range(e):
+                break
+            warnings.warn(
+                f"Skipping row {idx} in column '{selected}': {e}",
+                stacklevel=2,
+            )
+            continue
+        _append_layer(idx, scalar)
+
+    if layers:
+        _enable_grid(len(layers))
+    return layers or None
 
 
 def _enable_grid(n_layers: int) -> None:
@@ -516,6 +653,11 @@ def _read_one(
         ".parquet",
         ".pq",
     }
+    looks_vortex = s.endswith(
+        (".ome.vortex", ".vortex")
+    ) or p.suffix.lower() in {
+        ".vortex",
+    }
     looks_tiff = s.endswith(
         (".ome.tif", ".ome.tiff", ".tif", ".tiff")
     ) or p.suffix.lower() in {
@@ -527,7 +669,17 @@ def _read_one(
     add_kwargs: dict[str, Any] = {"name": p.name}
 
     # ---- OME-Arrow-backed sources -----------------------------------
-    if looks_stack or looks_zarr or looks_parquet or looks_tiff:
+    if (
+        looks_stack
+        or looks_zarr
+        or looks_parquet
+        or looks_tiff
+        or looks_vortex
+    ):
+        scalar = None
+        if looks_vortex:
+            # Vortex needs ome-arrow's ingest helper to produce a typed scalar.
+            scalar = _read_vortex_scalar(src)
         if looks_stack and stack_default_dim is not None:
             scalar = from_stack_pattern_path(
                 src,
@@ -535,9 +687,7 @@ def _read_one(
                 map_series_to="T",
                 clamp_to_uint16=True,
             )
-            obj = OMEArrow(scalar)
-        else:
-            obj = OMEArrow(src)
+        obj = OMEArrow(scalar if scalar is not None else src)
         arr = obj.export(how="numpy", dtype=np.uint16)  # TCZYX
         info = obj.info()  # may contain 'shape': (T, C, Z, Y, X)
 
@@ -652,6 +802,10 @@ def reader_function(
             parquet_layers = _read_parquet_rows(src, mode)
             if parquet_layers is not None:
                 layers.extend(parquet_layers)
+                continue
+            vortex_layers = _read_vortex_rows(src, mode)
+            if vortex_layers is not None:
+                layers.extend(vortex_layers)
                 continue
             layers.append(_read_one(src, mode=mode))
         except Exception as e:

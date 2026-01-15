@@ -52,5 +52,12 @@ jobs:
         with:
           qt: true
           wm: herbstluftwm
+      - name: Install test dependencies
+        run: >
+          uv sync --frozen
+          --python ${{ matrix.python_version }}
+          --extra all
+          --extra pyside6
+          --extra vortex
       - name: Run pytest
         run: uv run --python ${{ matrix.python_version }} --frozen pytest
