@@ -669,7 +669,13 @@ def _read_one(
     add_kwargs: dict[str, Any] = {"name": p.name}
 
     # ---- OME-Arrow-backed sources -----------------------------------
-    if looks_stack or looks_zarr or looks_parquet or looks_tiff or looks_vortex:
+    if (
+        looks_stack
+        or looks_zarr
+        or looks_parquet
+        or looks_tiff
+        or looks_vortex
+    ):
         scalar = None
         if looks_vortex:
             # Vortex needs ome-arrow's ingest helper to produce a typed scalar.
