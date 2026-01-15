@@ -363,6 +363,39 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
     ] or list(files)
     names = [p.name for p in candidates]
 
+    split_names = [re.split(r"(\d+)", name) for name in names]
+    if split_names and all(
+        len(parts) == len(split_names[0]) for parts in split_names
+    ):
+        static_ok = True
+        for idx in range(0, len(split_names[0]), 2):
+            token = split_names[0][idx]
+            if any(parts[idx] != token for parts in split_names):
+                static_ok = False
+                break
+        if static_ok:
+            pattern_parts: list[str] = []
+            for idx, token in enumerate(split_names[0]):
+                if idx % 2 == 0:
+                    pattern_parts.append(token)
+                    continue
+                values = [parts[idx] for parts in split_names]
+                unique = sorted(set(values), key=lambda v: int(v))
+                if len(unique) == 1:
+                    pattern_parts.append(unique[0])
+                    continue
+                width = max(len(v) for v in unique)
+                nums = [int(v) for v in unique]
+                if len(unique) == (max(nums) - min(nums) + 1):
+                    start = str(min(nums)).zfill(width)
+                    end = str(max(nums)).zfill(width)
+                    pattern_parts.append(f"<{start}-{end}>")
+                else:
+                    values_str = ",".join(str(n).zfill(width) for n in nums)
+                    pattern_parts.append(f"<{values_str}>")
+            pattern_name = "".join(pattern_parts)
+            return str(folder / pattern_name)
+
     matches = [re.search(r"(\d+)(?!.*\d)", name) for name in names]
     if all(m is not None for m in matches):
         prefix = names[0][: matches[0].start()]
@@ -415,7 +448,7 @@ def _prompt_stack_pattern(files: Sequence[Path], folder: Path) -> str | None:
 
     label = (
         "Multiple files detected. Enter a stack pattern string to load as a 3D stack.\n"
-        "Use <...> for indices (e.g. z<000-120>), or a regex like .* for non-numbered files.\n"
+        "Use <...> for indices (e.g. z<000-120> or c<111,222>), or a regex like .* for non-numbered files.\n"
         "If no dimension token (z/c/t) is present, Z is assumed for this stack.\n\n"
         f"Suggested:\n{suggested}\n\n"
         "Edit if needed and press OK, or Cancel to load files individually."

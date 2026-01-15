@@ -272,6 +272,14 @@ def test_reader_stack_pattern_nviz_dataset(monkeypatch: pytest.MonkeyPatch):
     assert data.shape[-3] == 22
 
 
+def test_suggest_stack_pattern_nviz_dataset():
+    folder = DATA_ROOT / "nviz-artificial-4d-dataset"
+    files = sorted(folder.glob("E99_C*_ZS*.tif"))
+    assert files
+    suggested = reader_mod._suggest_stack_pattern(files, folder)
+    assert suggested == str(folder / "E99_C<111,222>_ZS<000-021>.tif")
+
+
 def _struct_columns(path: str) -> list[str]:
     table = pq.read_table(path)
     cols = []
