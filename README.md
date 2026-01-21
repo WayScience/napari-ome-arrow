@@ -101,7 +101,7 @@ pip install "napari-ome-arrow[vortex]"
 
 1. Install the plugin (see above).
 1. Start napari.
-1. Drag and drop an OME-TIFF, OME-Zarr, OME-Parquet, OME-Vortex file, or stack pattern into the viewer.
+1. Drag and drop an OME-TIFF, OME-Zarr, OME-Parquet, OME-Vortex file, a stack pattern, or a multi-select stack (e.g. `img_000.tif` ... `img_123.tif`) into the viewer.
 1. When prompted, choose **Image** or **Labels**.
 
 The plugin will:
@@ -109,6 +109,7 @@ The plugin will:
 - load the data through `OMEArrow`,
 - map channels and axes appropriately, and
 - automatically switch to 3D if there is a Z-stack.
+- When multiple files look like a numbered stack, treat them as a single stack rather than independent layers.
 
 ### From the command line
 
@@ -128,6 +129,9 @@ napari tests/data/cytodataframe/BR00117006.ome.parquet
 
 # Prefill stack voxel spacing for stack patterns (Z,Y,X or T,C,Z,Y,X)
 NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/z<000-120>.tif"
+
+# Prefill stack voxel spacing for multi-file stacks dropped into the GUI
+NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/img_000.tif"
 ```
 
 ## Contributing
