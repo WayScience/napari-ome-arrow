@@ -62,6 +62,9 @@ It provides a single, explicit pathway for loading OME-style bioimage data:
 - ✅ **Grid view for multi-row OME-Parquet / OME-Vortex**
   When a Parquet or Vortex file contains multiple OME-Arrow rows, each row is loaded as its own layer and the viewer is switched to napari’s grid mode. Set `NAPARI_OME_ARROW_PARQUET_COLUMN` or `NAPARI_OME_ARROW_VORTEX_COLUMN` to pick which image column to visualize.
 
+- ✅ **Stack scale prompt + override**
+  When loading image stacks (stack patterns), napari prompts for voxel spacing and applies it as layer scale. You can prefill this via `NAPARI_OME_ARROW_STACK_SCALE` (format: `Z,Y,X` or `T,C,Z,Y,X`).
+
 ______________________________________________________________________
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template] (None).
@@ -122,6 +125,9 @@ NAPARI_OME_ARROW_LAYER_TYPE=labels napari my_labels.ome.parquet
 NAPARI_OME_ARROW_LAYER_TYPE=image \\
 NAPARI_OME_ARROW_PARQUET_COLUMN=Image_FileName_OrigDNA_OMEArrow_ORIG \\
 napari tests/data/cytodataframe/BR00117006.ome.parquet
+
+# Prefill stack voxel spacing for stack patterns (Z,Y,X or T,C,Z,Y,X)
+NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/z<000-120>.tif"
 ```
 
 ## Contributing
