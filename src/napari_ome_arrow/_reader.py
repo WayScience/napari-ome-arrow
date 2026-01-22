@@ -17,6 +17,8 @@ import re
 import warnings
 from collections import Counter
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Union
 
@@ -855,11 +857,9 @@ def _read_rgb_stack_pattern(pattern: str) -> tuple[np.ndarray, bool]:
     if not files:
         raise FileNotFoundError(f"No files matched pattern: {pattern}")
 
-    frames: list[np.ndarray] = []
-    rgb = False
     shape_ref: tuple[int, ...] | None = None
 
-    for fpath in files:
+    def _read_frame(fpath: Path) -> tuple[np.ndarray, bool]:
         reader = (
             OMEReader
             if fpath.suffix.lower() in (".ome.tif", ".ome.tiff")
@@ -869,30 +869,37 @@ def _read_rgb_stack_pattern(pattern: str) -> tuple[np.ndarray, bool]:
         arr = np.asarray(img.data)
 
         if arr.ndim == 2:
-            frame = arr
-        elif arr.ndim == 3:
+            return arr, False
+        if arr.ndim == 3:
             if arr.shape[-1] in (3, 4):
-                frame = arr
-                rgb = True
-            elif arr.shape[0] in (3, 4):
-                frame = np.moveaxis(arr, 0, -1)
-                rgb = True
-            else:
-                raise ValueError(
-                    f"Unsupported 3D frame shape {arr.shape} for {fpath.name}"
-                )
-        else:
+                return arr, True
+            if arr.shape[0] in (3, 4):
+                return np.moveaxis(arr, 0, -1), True
             raise ValueError(
-                f"Unsupported frame dimensions {arr.shape} for {fpath.name}"
+                f"Unsupported 3D frame shape {arr.shape} for {fpath.name}"
             )
+        raise ValueError(
+            f"Unsupported frame dimensions {arr.shape} for {fpath.name}"
+        )
 
+    with ThreadPoolExecutor(
+        max_workers=min(8, max(1, len(files)))
+    ) as executor:
+        results = list(executor.map(_read_frame, files))
+
+    frames: list[np.ndarray] = []
+    rgb_flags: list[bool] = []
+    for frame, is_rgb in results:
         if shape_ref is None:
             shape_ref = frame.shape
         elif frame.shape != shape_ref:
             raise ValueError(
-                f"Shape mismatch for {fpath.name}: {frame.shape} vs {shape_ref}"
+                f"Shape mismatch for stack: {frame.shape} vs {shape_ref}"
             )
         frames.append(frame)
+        rgb_flags.append(is_rgb)
+
+    rgb = any(rgb_flags)
 
     stack = np.stack(frames, axis=0)
     return stack, rgb
@@ -1042,6 +1049,7 @@ def _prompt_stack_scale(
         return default_scale
 
 
+@lru_cache(maxsize=128)
 def _infer_stack_scale_from_pattern(
     pattern: str, stack_default_dim: str | None
 ) -> tuple[float, float, float] | None:
