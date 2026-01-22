@@ -227,11 +227,16 @@ def test_reader_prompts_for_stack_pattern_with_multiple_files(
     captured: dict[str, object] = {}
 
     def fake_read_one(
-        src: str, mode: str, *, stack_default_dim: str | None = None
+        src: str,
+        mode: str,
+        *,
+        stack_default_dim: str | None = None,
+        stack_scale_override: tuple[float, ...] | None = None,
     ):
         captured["src"] = src
         captured["mode"] = mode
         captured["stack_default_dim"] = stack_default_dim
+        captured["stack_scale_override"] = stack_scale_override
         data = np.zeros((1, 1, 1, 4, 4), dtype=np.uint16)
         return data, {"name": "stack"}, "image"
 

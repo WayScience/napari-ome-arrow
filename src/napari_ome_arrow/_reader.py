@@ -1042,6 +1042,22 @@ def _prompt_stack_scale(
         return default_scale
 
 
+def _infer_stack_scale_from_pattern(
+    pattern: str, stack_default_dim: str | None
+) -> tuple[float, float, float] | None:
+    try:
+        scalar = from_stack_pattern_path(
+            pattern,
+            default_dim_for_unspecified=stack_default_dim,
+            map_series_to="T",
+            clamp_to_uint16=True,
+        )
+        obj = OMEArrow(scalar)
+    except Exception:
+        return None
+    return _scale_from_ome_arrow(obj)
+
+
 def _normalize_stack_scale(scale: Sequence[float]) -> tuple[float, ...]:
     if len(scale) == 3:
         z, y, x = scale
@@ -1117,7 +1133,11 @@ def napari_get_reader(path: Union[PathLike, Sequence[PathLike]]):
 
 
 def _read_one(
-    src: str, mode: str, *, stack_default_dim: str | None = None
+    src: str,
+    mode: str,
+    *,
+    stack_default_dim: str | None = None,
+    stack_scale_override: Sequence[float] | None = None,
 ) -> LayerData:
     """
     Read a single source into (data, add_kwargs, layer_type),
@@ -1183,21 +1203,24 @@ def _read_one(
         scale_override: tuple[float, ...] | None = None
         inferred_scale = _scale_from_ome_arrow(obj)
         if looks_stack:
-            env_scale = os.environ.get("NAPARI_OME_ARROW_STACK_SCALE")
-            if env_scale:
-                try:
-                    scale_override = _parse_stack_scale(env_scale)
-                except ValueError as exc:
-                    warnings.warn(
-                        f"Invalid NAPARI_OME_ARROW_STACK_SCALE '{env_scale}': {exc}.",
-                        stacklevel=2,
-                    )
-                    scale_override = None
+            if stack_scale_override is not None:
+                scale_override = tuple(stack_scale_override)
+            else:
+                env_scale = os.environ.get("NAPARI_OME_ARROW_STACK_SCALE")
+                if env_scale:
+                    try:
+                        scale_override = _parse_stack_scale(env_scale)
+                    except ValueError as exc:
+                        warnings.warn(
+                            f"Invalid NAPARI_OME_ARROW_STACK_SCALE '{env_scale}': {exc}.",
+                            stacklevel=2,
+                        )
+                        scale_override = None
 
-            if scale_override is None and inferred_scale is None:
-                scale_override = _prompt_stack_scale(
-                    sample_path=src, default_scale=None
-                )
+                if scale_override is None and inferred_scale is None:
+                    scale_override = _prompt_stack_scale(
+                        sample_path=src, default_scale=None
+                    )
 
         # Recover from accidental 1D flatten
         if getattr(arr, "ndim", 0) == 1:
@@ -1324,7 +1347,29 @@ def reader_function(
             channel_names = _channel_names_from_pattern(
                 stack_pattern, stack_default_dim
             )
+            resolved_stack_scale = None
             if mode == "image" and channel_names and len(channel_names) > 1:
+                inferred_stack_scale = _infer_stack_scale_from_pattern(
+                    stack_pattern, stack_default_dim
+                )
+                env_scale = os.environ.get("NAPARI_OME_ARROW_STACK_SCALE")
+                if env_scale:
+                    try:
+                        resolved_stack_scale = _parse_stack_scale(env_scale)
+                    except ValueError as exc:
+                        warnings.warn(
+                            f"Invalid NAPARI_OME_ARROW_STACK_SCALE '{env_scale}': {exc}.",
+                            stacklevel=2,
+                        )
+                        resolved_stack_scale = None
+                if (
+                    resolved_stack_scale is None
+                    and inferred_stack_scale is None
+                ):
+                    resolved_stack_scale = _prompt_stack_scale(
+                        sample_path=stack_pattern, default_scale=None
+                    )
+
                 for label in channel_names:
                     channel_pattern = _replace_channel_placeholder(
                         stack_pattern, label, stack_default_dim
@@ -1337,6 +1382,7 @@ def reader_function(
                             channel_pattern,
                             mode=mode,
                             stack_default_dim=channel_default_dim,
+                            stack_scale_override=resolved_stack_scale,
                         )
                         arr, add_kwargs = _strip_channel_axis(arr, add_kwargs)
                     except Exception as exc:
