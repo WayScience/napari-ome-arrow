@@ -835,7 +835,7 @@ def _files_from_pattern(pattern: str) -> list[Path]:
     matched = [f for f in candidates if compiled.match(f.name)]
 
     def z_key(path: Path) -> tuple[int, str]:
-        match = re.search(r"Z[S]?(\\d+)", path.name)
+        match = re.search(r"Z[S]?(\d+)", path.name)
         return (int(match.group(1)) if match else -1, path.name)
 
     return sorted(matched, key=z_key)

@@ -218,7 +218,7 @@ def test_reader_prompts_for_stack_pattern_with_multiple_files(
     monkeypatch.setattr(
         reader_mod,
         "_get_layer_mode",
-        lambda sample_path, image_type_hint=None: "image",
+        lambda **_kwargs: "image",
     )
     monkeypatch.setattr(
         reader_mod, "_prompt_stack_pattern", lambda files, folder: suggested
