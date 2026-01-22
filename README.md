@@ -130,8 +130,8 @@ napari tests/data/cytodataframe/BR00117006.ome.parquet
 # Prefill stack voxel spacing for stack patterns (Z,Y,X or T,C,Z,Y,X)
 NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/z<000-120>.tif"
 
-# Prefill stack voxel spacing for multi-file stacks dropped into the GUI
-NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/img_000.tif"
+# Prefill stack voxel spacing for multi-file stacks (use a pattern or glob on CLI)
+NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/img_<000-120>.tif"
 ```
 
 ## Contributing

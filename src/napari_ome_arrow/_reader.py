@@ -1247,9 +1247,7 @@ def _read_one(
                 else None
             )
         if scale is not None:
-            add_kwargs.setdefault("scale", scale)
-            if scale is not None:
-                add_kwargs["scale"] = scale
+            add_kwargs["scale"] = scale
 
         return arr, add_kwargs, layer_type
 
