@@ -11,6 +11,7 @@ Behavior:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -30,6 +31,7 @@ from ome_arrow.meta import OME_ARROW_STRUCT
 
 PathLike = Union[str, Path]
 LayerData = tuple[np.ndarray, dict[str, Any], str]
+LOGGER = logging.getLogger(__name__)
 
 
 def _maybe_set_viewer_3d(arr: np.ndarray) -> None:
@@ -182,6 +184,9 @@ def _infer_layer_mode_from_source(
         or looks_tiff
         or looks_vortex
     ):
+        LOGGER.debug(
+            "Skipping layer-mode inference for non-OME source: %s", src
+        )
         return None
 
     scalar = None
