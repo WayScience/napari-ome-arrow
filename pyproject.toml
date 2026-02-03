@@ -59,12 +59,12 @@ dev = [
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.package-data]
+"*" = [ "*.yaml" ]
+
 [tool.setuptools.packages.find]
 where = [ "src" ]
 exclude = [ "*.tests", "*.tests.*", "tests*" ]
-
-[tool.setuptools.package-data]
-"*" = [ "*.yaml" ]
 
 [tool.setuptools_scm]
 write_to = "src/napari_ome_arrow/_version.py"
