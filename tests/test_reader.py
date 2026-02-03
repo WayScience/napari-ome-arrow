@@ -216,7 +216,9 @@ def test_reader_prompts_for_stack_pattern_with_multiple_files(
     suggested = str(tmp_path / "img_<000-002>.npy")
 
     monkeypatch.setattr(
-        reader_mod, "_get_layer_mode", lambda sample_path: "image"
+        reader_mod,
+        "_get_layer_mode",
+        lambda **_kwargs: "image",
     )
     monkeypatch.setattr(
         reader_mod, "_prompt_stack_pattern", lambda files, folder: suggested
@@ -225,11 +227,16 @@ def test_reader_prompts_for_stack_pattern_with_multiple_files(
     captured: dict[str, object] = {}
 
     def fake_read_one(
-        src: str, mode: str, *, stack_default_dim: str | None = None
+        src: str,
+        mode: str,
+        *,
+        stack_default_dim: str | None = None,
+        stack_scale_override: tuple[float, ...] | None = None,
     ):
         captured["src"] = src
         captured["mode"] = mode
         captured["stack_default_dim"] = stack_default_dim
+        captured["stack_scale_override"] = stack_scale_override
         data = np.zeros((1, 1, 1, 4, 4), dtype=np.uint16)
         return data, {"name": "stack"}, "image"
 
@@ -264,12 +271,52 @@ def test_reader_stack_pattern_nviz_dataset(monkeypatch: pytest.MonkeyPatch):
     with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
         layers = reader_mod.reader_function([str(p) for p in files])
 
-    assert len(layers) == 1
-    data, add_kwargs, layer_type = layers[0]
-    assert layer_type == "image"
-    assert data.ndim >= 3
-    assert data.shape[1] == 2
-    assert data.shape[-3] == 22
+    assert len(layers) == 2
+    expected_channels = ["111", "222"]
+    for idx, (data, add_kwargs, layer_type) in enumerate(layers):
+        assert layer_type == "image"
+        assert data.ndim >= 3
+        assert data.shape[-3] == 22
+        assert add_kwargs["name"].endswith(f"[{expected_channels[idx]}]")
+
+
+def test_reader_stack_pattern_applies_scale_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pattern = (
+        DATA_ROOT
+        / "nviz-artificial-4d-dataset"
+        / "E99_C<111,222>_ZS<000-021>.tif"
+    )
+    folder = pattern.parent
+    files = sorted(folder.glob("E99_C111_ZS*.tif"))[:2]
+    assert len(files) == 2
+
+    monkeypatch.setattr(
+        reader_mod,
+        "_prompt_stack_pattern",
+        lambda _files, _folder: str(pattern),
+    )
+
+    with (
+        temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"),
+        temporary_env_var("NAPARI_OME_ARROW_STACK_SCALE", "1.0,0.5,0.2"),
+    ):
+        layers = reader_mod.reader_function([str(p) for p in files])
+
+    assert len(layers) == 2
+    for _data, add_kwargs, layer_type in layers:
+        assert layer_type == "image"
+        assert "scale" in add_kwargs
+        assert add_kwargs["scale"] == pytest.approx((1.0, 1.0, 0.5, 0.2))
+
+
+def test_infer_layer_mode_from_image_type():
+    record = {"image_type": "labels"}
+    assert reader_mod._infer_layer_mode_from_record(record) == "labels"
+
+    record = {"pixels_meta": {"image_type": "image"}}
+    assert reader_mod._infer_layer_mode_from_record(record) == "image"
 
 
 def test_suggest_stack_pattern_nviz_dataset():
@@ -278,6 +325,24 @@ def test_suggest_stack_pattern_nviz_dataset():
     assert files
     suggested = reader_mod._suggest_stack_pattern(files, folder)
     assert suggested == str(folder / "E99_C<111,222>_ZS<000-021>.tif")
+
+
+def test_suggest_stack_pattern_z_token_nonsequential_channels(tmp_path: Path):
+    names = [
+        "C10-1_405_ZS000_FOV-1.tif",
+        "C10-1_405_ZS001_FOV-1.tif",
+        "C10-1_488_ZS000_FOV-1.tif",
+        "C10-1_555_ZS001_FOV-1.tif",
+        "C10-1_Merge_ZS002_FOV-1.tif",
+        "C10-1_TRANS_ZS003_FOV-1.tif",
+    ]
+    for name in names:
+        (tmp_path / name).touch()
+    files = [tmp_path / name for name in names]
+    suggested = reader_mod._suggest_stack_pattern(files, tmp_path)
+    assert suggested == str(
+        tmp_path / "C10-1_<405,488,555,Merge,TRANS>_ZS<000-003>_FOV-1.tif"
+    )
 
 
 def _struct_columns(path: str) -> list[str]:

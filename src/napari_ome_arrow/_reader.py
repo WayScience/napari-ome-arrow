@@ -11,67 +11,91 @@ Behavior:
 
 from __future__ import annotations
 
-import math
 import os
-import re
 import warnings
-from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Union
 
-import numpy as np
-import pyarrow as pa
-from ome_arrow.core import OMEArrow
-from ome_arrow.ingest import from_stack_pattern_path
-from ome_arrow.meta import OME_ARROW_STRUCT
+from ._reader_infer import (  # noqa: F401
+    _infer_layer_mode_from_record,
+    _infer_layer_mode_from_source,
+    _looks_like_ome_source,
+    _normalize_image_type,
+)
+from ._reader_napari import (  # noqa: F401
+    _maybe_set_viewer_3d,
+    _strip_channel_axis,
+)
+from ._reader_omearrow import (  # noqa: F401
+    _read_one,
+    _read_parquet_rows,
+    _read_vortex_rows,
+)
+from ._reader_stack import (  # noqa: F401
+    _channel_names_from_pattern,
+    _collect_stack_files,
+    _infer_stack_scale_from_pattern,
+    _parse_stack_scale,
+    _prompt_stack_pattern,
+    _prompt_stack_scale,
+    _read_rgb_stack_pattern,
+    _replace_channel_placeholder,
+    _stack_default_dim_for_pattern,
+    _suggest_stack_pattern,
+)
+from ._reader_types import LayerData, PathLike
 
-PathLike = Union[str, Path]
-LayerData = tuple[np.ndarray, dict[str, Any], str]
-
-
-def _maybe_set_viewer_3d(arr: np.ndarray) -> None:
-    """
-    If the array has a Z axis with size > 1, switch the current napari viewer
-    to 3D (ndisplay = 3).
-
-    Assumes OME-Arrow's TCZYX convention or a subset, i.e., Z is always
-    the third-from-last axis. No-op if there's no active viewer.
-    """
-    # Need at least (Z, Y, X)
-    if arr.ndim < 3:
-        return
-
-    z_size = arr.shape[-3]
-    if z_size <= 1:
-        return
-
-    try:
-        import napari
-
-        viewer = napari.current_viewer()
-    except Exception:
-        # no viewer / not in GUI context → silently skip
-        return
-
-    if viewer is not None:
-        viewer.dims.ndisplay = 3
-
+__all__ = [
+    "napari_get_reader",
+    "reader_function",
+    "_infer_layer_mode_from_record",
+    "_infer_layer_mode_from_source",
+    "_looks_like_ome_source",
+    "_normalize_image_type",
+    "_maybe_set_viewer_3d",
+    "_strip_channel_axis",
+    "_read_one",
+    "_read_parquet_rows",
+    "_read_vortex_rows",
+    "_channel_names_from_pattern",
+    "_collect_stack_files",
+    "_infer_stack_scale_from_pattern",
+    "_parse_stack_scale",
+    "_prompt_stack_pattern",
+    "_prompt_stack_scale",
+    "_read_rgb_stack_pattern",
+    "_replace_channel_placeholder",
+    "_stack_default_dim_for_pattern",
+    "_suggest_stack_pattern",
+]
 
 # --------------------------------------------------------------------- #
 #  Mode selection (env var + GUI prompt)
 # --------------------------------------------------------------------- #
 
 
-def _get_layer_mode(sample_path: str) -> str:
-    """
-    Decide whether to load as 'image' or 'labels'.
+def _get_layer_mode(
+    sample_path: str, *, image_type_hint: str | None = None
+) -> str:
+    """Decide whether to load as "image" or "labels".
 
     Priority:
-      1. NAPARI_OME_ARROW_LAYER_TYPE env var (image/labels)
-      2. If in a Qt GUI context, show a modal dialog asking the user
-      3. Otherwise, default to 'image'
+    1. `NAPARI_OME_ARROW_LAYER_TYPE` env var (image/labels).
+    2. If in a Qt GUI context, show a modal dialog asking the user.
+    3. Otherwise, default to "image".
+
+    Args:
+        sample_path: Path used for prompt labeling.
+        image_type_hint: Optional inferred mode from metadata.
+
+    Returns:
+        The selected mode, "image" or "labels".
+
+    Raises:
+        RuntimeError: If the environment variable is invalid or the user
+            cancels the dialog.
     """
+    # Env var override (used in headless/batch workflows).
     mode = os.environ.get("NAPARI_OME_ARROW_LAYER_TYPE")
     if mode is not None:
         mode = mode.lower()
@@ -80,6 +104,10 @@ def _get_layer_mode(sample_path: str) -> str:
         raise RuntimeError(
             f"Invalid NAPARI_OME_ARROW_LAYER_TYPE={mode!r}; expected 'image' or 'labels'."
         )
+
+    # Metadata hint (best effort).
+    if image_type_hint in {"image", "labels"}:
+        return image_type_hint
 
     # No env var → try to prompt in GUI context
     try:
@@ -131,487 +159,20 @@ def _get_layer_mode(sample_path: str) -> str:
 
 
 # --------------------------------------------------------------------- #
-#  Helper utilities
-# --------------------------------------------------------------------- #
-
-
-def _as_labels(arr: np.ndarray) -> np.ndarray:
-    """Convert any array into an integer label array."""
-    if arr.dtype.kind == "f":
-        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-        arr = np.round(arr).astype(np.int32, copy=False)
-    elif arr.dtype.kind not in ("i", "u"):
-        arr = arr.astype(np.int32, copy=False)
-    return arr
-
-
-def _looks_like_ome_source(path_str: str) -> bool:
-    """Basic extension / pattern sniffing for OME-Arrow supported formats."""
-    s = path_str.strip().lower()
-    p = Path(path_str)
-
-    looks_stack = any(c in path_str for c in "<>*")
-    looks_zarr = (
-        s.endswith((".ome.zarr", ".zarr"))
-        or ".zarr/" in s
-        or p.exists()
-        and p.is_dir()
-        and p.suffix.lower() == ".zarr"
-    )
-    looks_parquet = s.endswith(
-        (".ome.parquet", ".parquet", ".pq")
-    ) or p.suffix.lower() in {
-        ".parquet",
-        ".pq",
-    }
-    looks_vortex = s.endswith(
-        (".ome.vortex", ".vortex")
-    ) or p.suffix.lower() in {
-        ".vortex",
-    }
-    looks_tiff = s.endswith(
-        (".ome.tif", ".ome.tiff", ".tif", ".tiff")
-    ) or p.suffix.lower() in {
-        ".tif",
-        ".tiff",
-    }
-    looks_npy = s.endswith(".npy")
-    looks_dir_stack = False
-    if p.exists() and p.is_dir() and not looks_zarr:
-        try:
-            stack_files = [
-                f
-                for f in p.iterdir()
-                if f.is_file()
-                and f.name.lower().endswith(
-                    (
-                        ".ome.tif",
-                        ".ome.tiff",
-                        ".tif",
-                        ".tiff",
-                        ".npy",
-                    )
-                )
-            ]
-            looks_dir_stack = len(stack_files) > 1
-        except OSError:
-            looks_dir_stack = False
-    return (
-        looks_stack
-        or looks_zarr
-        or looks_parquet
-        or looks_vortex
-        or looks_tiff
-        or looks_npy
-        or looks_dir_stack
-    )
-
-
-# --------------------------------------------------------------------- #
-#  OME-Parquet helpers (multi-row grid)
-# --------------------------------------------------------------------- #
-
-
-def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
-    """Return struct columns matching the OME-Arrow schema."""
-    import pyarrow as pa
-
-    expected_fields = {f.name for f in OME_ARROW_STRUCT}
-    names: list[str] = []
-    for name, col in zip(table.column_names, table.columns, strict=False):
-        if (
-            pa.types.is_struct(col.type)
-            and {f.name for f in col.type} == expected_fields
-        ):
-            names.append(name)
-    return names
-
-
-def _read_vortex_scalar(src: str) -> pa.StructScalar:
-    # Delegate Vortex parsing to ome-arrow, which handles the file format details.
-    try:
-        from ome_arrow.ingest import from_ome_vortex
-    except Exception as exc:
-        raise ImportError(
-            "OME-Vortex support requires ome-arrow with vortex support and the "
-            "optional 'vortex' extra (vortex-data). Install with "
-            "'pip install \"napari-ome-arrow[vortex]\"'."
-        ) from exc
-
-    override = os.environ.get(
-        "NAPARI_OME_ARROW_VORTEX_COLUMN"
-    ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
-    # Use a single row from the requested/auto-detected column for OMEArrow.
-    return from_ome_vortex(
-        src,
-        column_name=override or "ome_arrow",
-        row_index=0,
-        strict_schema=False,
-    )
-
-
-def _vortex_row_out_of_range(exc: Exception) -> bool:
-    if isinstance(exc, IndexError):
-        return True
-    msg = str(exc).lower()
-    return "out of range" in msg or ("row_index" in msg and "range" in msg)
-
-
-def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
-    """
-    Specialized path for multi-row OME-Vortex:
-    create one layer per row and enable napari grid view.
-    """
-    s = src.lower()
-    if not (s.endswith((".ome.vortex", ".vortex"))):
-        return None
-
-    try:
-        from ome_arrow.ingest import from_ome_vortex
-    except Exception:
-        return None
-
-    override = os.environ.get(
-        "NAPARI_OME_ARROW_VORTEX_COLUMN"
-    ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
-    selected = override or "ome_arrow"
-
-    try:
-        first = from_ome_vortex(
-            src,
-            column_name=selected,
-            row_index=0,
-            strict_schema=False,
-        )
-    except Exception:
-        return None
-
-    try:
-        second = from_ome_vortex(
-            src,
-            column_name=selected,
-            row_index=1,
-            strict_schema=False,
-        )
-    except Exception:
-        return None
-
-    layers: list[LayerData] = []
-
-    def _append_layer(idx: int, scalar: pa.StructScalar) -> None:
-        try:
-            arr = OMEArrow(scalar).export(
-                how="numpy", dtype=np.uint16, strict=False
-            )
-        except Exception as e:  # pragma: no cover - warn and skip bad rows
-            warnings.warn(
-                f"Skipping row {idx} in column '{selected}': {e}",
-                stacklevel=2,
-            )
-            return
-
-        add_kwargs: dict[str, Any] = {
-            "name": f"{Path(src).name}[{selected}][row {idx}]"
-        }
-        if mode == "image":
-            if arr.ndim >= 5:
-                add_kwargs["channel_axis"] = 1  # TCZYX
-            elif arr.ndim == 4:
-                add_kwargs["channel_axis"] = 0  # CZYX
-            layer_type = "image"
-        else:
-            if arr.ndim == 5:
-                arr = arr[:, 0, ...]
-            elif arr.ndim == 4:
-                arr = arr[0, ...]
-            arr = _as_labels(arr)
-            add_kwargs.setdefault("opacity", 0.7)
-            layer_type = "labels"
-
-        _maybe_set_viewer_3d(arr)
-        layers.append((arr, add_kwargs, layer_type))
-
-    _append_layer(0, first)
-    _append_layer(1, second)
-
-    max_rows = 10000
-    for idx in range(2, max_rows):
-        try:
-            scalar = from_ome_vortex(
-                src,
-                column_name=selected,
-                row_index=idx,
-                strict_schema=False,
-            )
-        except Exception as e:
-            if _vortex_row_out_of_range(e):
-                break
-            warnings.warn(
-                f"Skipping row {idx} in column '{selected}': {e}",
-                stacklevel=2,
-            )
-            continue
-        _append_layer(idx, scalar)
-
-    if layers:
-        _enable_grid(len(layers))
-    return layers or None
-
-
-def _enable_grid(n_layers: int) -> None:
-    """Switch current viewer into grid view when possible."""
-    if n_layers <= 1:
-        return
-    try:
-        import napari
-
-        viewer = napari.current_viewer()
-    except Exception:
-        return
-    if viewer is None:
-        return
-
-    cols = math.ceil(math.sqrt(n_layers))
-    rows = math.ceil(n_layers / cols)
-    try:
-        viewer.grid.enabled = True
-        viewer.grid.shape = (rows, cols)
-    except Exception:
-        # grid is best-effort; ignore if unavailable
-        return
-
-
-def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
-    """
-    Specialized path for multi-row OME-Parquet:
-    create one layer per row and enable napari grid view.
-    """
-    s = src.lower()
-    if not (s.endswith((".ome.parquet", ".parquet", ".pq"))):
-        return None
-
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-    except Exception:
-        return None
-
-    table = pq.read_table(src)
-    ome_cols = _find_ome_parquet_columns(table)
-    if not ome_cols or table.num_rows <= 1:
-        return None
-
-    override = os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
-    if override:
-        matched = [c for c in ome_cols if c.lower() == override.lower()]
-        selected = matched[0] if matched else ome_cols[0]
-        if not matched:
-            warnings.warn(
-                f"Column '{override}' not found in {Path(src).name}; using {selected!r}.",
-                stacklevel=2,
-            )
-    else:
-        selected = ome_cols[0]
-
-    column = table[selected]
-    layers: list[LayerData] = []
-
-    for idx in range(table.num_rows):
-        try:
-            record = column.slice(idx, 1).to_pylist()[0]
-            scalar = pa.scalar(record, type=OME_ARROW_STRUCT)
-            arr = OMEArrow(scalar).export(
-                how="numpy", dtype=np.uint16, strict=False
-            )
-        except Exception as e:  # pragma: no cover - warn and skip bad rows
-            warnings.warn(
-                f"Skipping row {idx} in column '{selected}': {e}",
-                stacklevel=2,
-            )
-            continue
-
-        add_kwargs: dict[str, Any] = {
-            "name": f"{Path(src).name}[{selected}][row {idx}]"
-        }
-        if mode == "image":
-            if arr.ndim >= 5:
-                add_kwargs["channel_axis"] = 1  # TCZYX
-            elif arr.ndim == 4:
-                add_kwargs["channel_axis"] = 0  # CZYX
-            layer_type = "image"
-        else:
-            if arr.ndim == 5:
-                arr = arr[:, 0, ...]
-            elif arr.ndim == 4:
-                arr = arr[0, ...]
-            arr = _as_labels(arr)
-            add_kwargs.setdefault("opacity", 0.7)
-            layer_type = "labels"
-
-        _maybe_set_viewer_3d(arr)
-        layers.append((arr, add_kwargs, layer_type))
-
-    if layers:
-        _enable_grid(len(layers))
-    return layers or None
-
-
-def _collect_stack_files(
-    paths: Sequence[str],
-) -> tuple[list[Path], Path] | None:
-    """Return stack candidate files and their shared folder, if any."""
-    if any(any(c in p for c in "<>*") for p in paths):
-        return None
-
-    if len(paths) == 1:
-        candidate = Path(paths[0])
-        if (
-            candidate.exists()
-            and candidate.is_dir()
-            and candidate.suffix.lower() not in {".zarr", ".ome.zarr"}
-        ):
-            files = sorted(p for p in candidate.iterdir() if p.is_file())
-            if len(files) > 1:
-                return files, candidate
-        return None
-
-    path_objs = [Path(p) for p in paths]
-    if not all(p.exists() and p.is_file() for p in path_objs):
-        return None
-
-    parents = {p.parent for p in path_objs}
-    if len(parents) != 1:
-        return None
-
-    return sorted(path_objs), parents.pop()
-
-
-def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
-    """Suggest a Bio-Formats-style stack pattern string for files."""
-    if not files:
-        return str(folder / ".*")
-
-    suffix_counts = Counter(p.suffix.lower() for p in files)
-    preferred_suffix = (
-        suffix_counts.most_common(1)[0][0] if suffix_counts else ""
-    )
-    candidates = [
-        p for p in files if p.suffix.lower() == preferred_suffix
-    ] or list(files)
-    names = [p.name for p in candidates]
-
-    split_names = [re.split(r"(\d+)", name) for name in names]
-    if split_names and all(
-        len(parts) == len(split_names[0]) for parts in split_names
-    ):
-        static_ok = True
-        for idx in range(0, len(split_names[0]), 2):
-            token = split_names[0][idx]
-            if any(parts[idx] != token for parts in split_names):
-                static_ok = False
-                break
-        if static_ok:
-            pattern_parts: list[str] = []
-            for idx, token in enumerate(split_names[0]):
-                if idx % 2 == 0:
-                    pattern_parts.append(token)
-                    continue
-                values = [parts[idx] for parts in split_names]
-                unique = sorted(set(values), key=lambda v: int(v))
-                if len(unique) == 1:
-                    pattern_parts.append(unique[0])
-                    continue
-                width = max(len(v) for v in unique)
-                nums = [int(v) for v in unique]
-                if len(unique) == (max(nums) - min(nums) + 1):
-                    start = str(min(nums)).zfill(width)
-                    end = str(max(nums)).zfill(width)
-                    pattern_parts.append(f"<{start}-{end}>")
-                else:
-                    values_str = ",".join(str(n).zfill(width) for n in nums)
-                    pattern_parts.append(f"<{values_str}>")
-            pattern_name = "".join(pattern_parts)
-            return str(folder / pattern_name)
-
-    matches = [re.search(r"(\d+)(?!.*\d)", name) for name in names]
-    if all(m is not None for m in matches):
-        prefix = names[0][: matches[0].start()]
-        suffix = names[0][matches[0].end() :]
-        if all(
-            name[: m.start()] == prefix and name[m.end() :] == suffix
-            for name, m in zip(names, matches, strict=False)
-        ):
-            nums = [int(m.group(1)) for m in matches if m is not None]
-            width = max(len(m.group(1)) for m in matches if m is not None)
-            start = str(min(nums)).zfill(width)
-            end = str(max(nums)).zfill(width)
-            pattern_name = f"{prefix}<{start}-{end}>{suffix}"
-            return str(folder / pattern_name)
-
-    common_prefix = os.path.commonprefix(names)
-    common_suffix = os.path.commonprefix([n[::-1] for n in names])[::-1]
-    prefix = re.escape(common_prefix)
-    suffix = re.escape(common_suffix)
-    pattern_name = f"{prefix}.*{suffix}"
-    return str(folder / pattern_name)
-
-
-def _prompt_stack_pattern(files: Sequence[Path], folder: Path) -> str | None:
-    """
-    Prompt for a stack pattern when multiple files are detected.
-
-    Returns a pattern string or None to skip stack parsing.
-    """
-    suggested = _suggest_stack_pattern(files, folder)
-
-    try:
-        from qtpy import QtWidgets
-    except Exception:
-        warnings.warn(
-            "Multiple files detected but Qt is not available; "
-            "loading files individually.",
-            stacklevel=2,
-        )
-        return None
-
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        warnings.warn(
-            "Multiple files detected but no QApplication instance; "
-            "loading files individually.",
-            stacklevel=2,
-        )
-        return None
-
-    label = (
-        "Multiple files detected. Enter a stack pattern string to load as a 3D stack.\n"
-        "Use <...> for indices (e.g. z<000-120> or c<111,222>), or a regex like .* for non-numbered files.\n"
-        "If no dimension token (z/c/t) is present, Z is assumed for this stack.\n\n"
-        f"Suggested:\n{suggested}\n\n"
-        "Edit if needed and press OK, or Cancel to load files individually."
-    )
-    text, ok = QtWidgets.QInputDialog.getText(
-        None,
-        "napari-ome-arrow: stack pattern",
-        label,
-        text=suggested,
-    )
-    if not ok:
-        return None
-    value = text.strip()
-    return value or None
-
-
-# --------------------------------------------------------------------- #
 #  napari entry point: napari_get_reader
 # --------------------------------------------------------------------- #
 
 
-def napari_get_reader(path: Union[PathLike, Sequence[PathLike]]):
-    """
-    Napari plugin hook: return a reader callable if this plugin can read `path`.
+def napari_get_reader(
+    path: PathLike | Sequence[PathLike],
+) -> Callable[[PathLike | Sequence[PathLike]], list[LayerData]] | None:
+    """Return a reader callable for napari if the path is supported.
 
-    This MUST return a function object (e.g. `reader_function`) or None.
+    Args:
+        path: A single path or a sequence of paths provided by napari.
+
+    Returns:
+        Reader callable if the path is supported, otherwise None.
     """
     # napari may pass a list/tuple or a single path
     first = str(path[0] if isinstance(path, (list, tuple)) else path).strip()
@@ -626,166 +187,126 @@ def napari_get_reader(path: Union[PathLike, Sequence[PathLike]]):
 # --------------------------------------------------------------------- #
 
 
-def _read_one(
-    src: str, mode: str, *, stack_default_dim: str | None = None
-) -> LayerData:
-    """
-    Read a single source into (data, add_kwargs, layer_type),
-    obeying `mode` = 'image' or 'labels'.
-
-    If `stack_default_dim` is provided and `src` is a stack pattern,
-    placeholders without explicit tokens will be treated as that dimension.
-    """
-    s = src.lower()
-    p = Path(src)
-
-    looks_stack = any(c in src for c in "<>*")
-    looks_zarr = (
-        s.endswith((".ome.zarr", ".zarr"))
-        or ".zarr/" in s
-        or p.exists()
-        and p.is_dir()
-        and p.suffix.lower() == ".zarr"
-    )
-    looks_parquet = s.endswith(
-        (".ome.parquet", ".parquet", ".pq")
-    ) or p.suffix.lower() in {
-        ".parquet",
-        ".pq",
-    }
-    looks_vortex = s.endswith(
-        (".ome.vortex", ".vortex")
-    ) or p.suffix.lower() in {
-        ".vortex",
-    }
-    looks_tiff = s.endswith(
-        (".ome.tif", ".ome.tiff", ".tif", ".tiff")
-    ) or p.suffix.lower() in {
-        ".tif",
-        ".tiff",
-    }
-    looks_npy = s.endswith(".npy")
-
-    add_kwargs: dict[str, Any] = {"name": p.name}
-
-    # ---- OME-Arrow-backed sources -----------------------------------
-    if (
-        looks_stack
-        or looks_zarr
-        or looks_parquet
-        or looks_tiff
-        or looks_vortex
-    ):
-        scalar = None
-        if looks_vortex:
-            # Vortex needs ome-arrow's ingest helper to produce a typed scalar.
-            scalar = _read_vortex_scalar(src)
-        if looks_stack and stack_default_dim is not None:
-            scalar = from_stack_pattern_path(
-                src,
-                default_dim_for_unspecified=stack_default_dim,
-                map_series_to="T",
-                clamp_to_uint16=True,
-            )
-        obj = OMEArrow(scalar if scalar is not None else src)
-        arr = obj.export(how="numpy", dtype=np.uint16)  # TCZYX
-        info = obj.info()  # may contain 'shape': (T, C, Z, Y, X)
-
-        # Recover from accidental 1D flatten
-        if getattr(arr, "ndim", 0) == 1:
-            T, C, Z, Y, X = info.get("shape", (1, 1, 1, 0, 0))
-            if Y and X and arr.size == Y * X:
-                arr = arr.reshape((1, 1, 1, Y, X))
-            else:
-                raise ValueError(
-                    f"Flat array with unknown shape for {src}: size={arr.size}"
-                )
-
-        if mode == "image":
-            # Image: preserve channels
-            if arr.ndim >= 5:
-                add_kwargs["channel_axis"] = 1  # TCZYX
-            elif arr.ndim == 4:
-                add_kwargs["channel_axis"] = 0  # CZYX
-            layer_type = "image"
-        else:
-            # Labels: squash channels, ensure integer dtype
-            if arr.ndim == 5:  # (T, C, Z, Y, X)
-                arr = arr[:, 0, ...]
-            elif arr.ndim == 4:  # (C, Z, Y, X)
-                arr = arr[0, ...]
-            arr = _as_labels(arr)
-            add_kwargs.setdefault("opacity", 0.7)
-            layer_type = "labels"
-
-        # 🔹 Ask viewer to switch to 3D if there is a real Z-stack
-        _maybe_set_viewer_3d(arr)
-
-        return arr, add_kwargs, layer_type
-
-    # ---- bare .npy fallback -----------------------------------------
-    if looks_npy:
-        arr = np.load(src)
-        if arr.ndim == 1:
-            n = int(np.sqrt(arr.size))
-            if n * n == arr.size:
-                arr = arr.reshape(n, n)
-            else:
-                raise ValueError(
-                    f".npy is 1D and not a square image: {arr.shape}"
-                )
-
-        if mode == "image":
-            if arr.ndim == 3 and arr.shape[0] <= 6:
-                add_kwargs["channel_axis"] = 0
-            layer_type = "image"
-        else:
-            # labels
-            if arr.ndim == 3:  # treat as (C, Y, X) → first channel
-                arr = arr[0, ...]
-            arr = _as_labels(arr)
-            add_kwargs.setdefault("opacity", 0.7)
-            layer_type = "labels"
-
-        # 🔹 Same 3D toggle for npy-based data
-        _maybe_set_viewer_3d(arr)
-
-        return arr, add_kwargs, layer_type
-
-    raise ValueError(f"Unrecognized path for napari-ome-arrow reader: {src}")
-
-
 def reader_function(
-    path: Union[PathLike, Sequence[PathLike]],
+    path: PathLike | Sequence[PathLike],
 ) -> list[LayerData]:
-    """
-    The actual reader callable napari will use.
+    """Read one or more paths into napari layer data.
 
-    It reads one or more paths, prompting the user (or using the env var)
-    to decide 'image' vs 'labels', and returns a list of LayerData tuples.
+    The user may be prompted (or an env var used) to decide "image" vs
+    "labels".
+
+    Args:
+        path: A single path or a sequence of paths provided by napari.
+
+    Returns:
+        List of layer tuples for napari.
+
+    Raises:
+        ValueError: If no readable inputs are found.
     """
     paths: list[str] = [
         str(p) for p in (path if isinstance(path, (list, tuple)) else [path])
     ]
     layers: list[LayerData] = []
 
+    # Offer a stack pattern prompt when multiple compatible files are present.
     stack_selection = _collect_stack_files(paths)
     stack_pattern = None
     if stack_selection is not None:
         stack_pattern = _prompt_stack_pattern(*stack_selection)
 
     # Use the original first path as context for the dialog label
+    mode_hint = None
+    if stack_pattern is not None:
+        stack_default_dim = _stack_default_dim_for_pattern(stack_pattern)
+        mode_hint = _infer_layer_mode_from_source(
+            stack_pattern, stack_default_dim=stack_default_dim
+        )
+    elif paths:
+        mode_hint = _infer_layer_mode_from_source(paths[0])
     try:
-        mode = _get_layer_mode(sample_path=paths[0])  # 'image' or 'labels'
+        mode = _get_layer_mode(
+            sample_path=paths[0], image_type_hint=mode_hint
+        )  # 'image' or 'labels'
     except RuntimeError as e:
         # If user canceled the dialog, propagate a clean error for napari
         raise ValueError(str(e)) from e
 
     if stack_pattern is not None:
         try:
-            layers.append(
-                _read_one(stack_pattern, mode=mode, stack_default_dim="Z")
+            channel_names = _channel_names_from_pattern(
+                stack_pattern, stack_default_dim
             )
+            resolved_stack_scale = None
+            if mode == "image" and channel_names and len(channel_names) > 1:
+                # Split each channel into separate layers for stack patterns.
+                inferred_stack_scale = _infer_stack_scale_from_pattern(
+                    stack_pattern, stack_default_dim
+                )
+                env_scale = os.environ.get("NAPARI_OME_ARROW_STACK_SCALE")
+                if env_scale:
+                    try:
+                        resolved_stack_scale = _parse_stack_scale(env_scale)
+                    except ValueError as exc:
+                        warnings.warn(
+                            f"Invalid NAPARI_OME_ARROW_STACK_SCALE '{env_scale}': {exc}.",
+                            stacklevel=2,
+                        )
+                        resolved_stack_scale = None
+                if (
+                    resolved_stack_scale is None
+                    and inferred_stack_scale is None
+                ):
+                    resolved_stack_scale = _prompt_stack_scale(
+                        sample_path=stack_pattern, default_scale=None
+                    )
+
+                for label in channel_names:
+                    channel_pattern = _replace_channel_placeholder(
+                        stack_pattern, label, stack_default_dim
+                    )
+                    channel_default_dim = _stack_default_dim_for_pattern(
+                        channel_pattern
+                    )
+                    try:
+                        arr, add_kwargs, layer_type = _read_one(
+                            channel_pattern,
+                            mode=mode,
+                            stack_default_dim=channel_default_dim,
+                            stack_scale_override=resolved_stack_scale,
+                        )
+                        arr, add_kwargs = _strip_channel_axis(arr, add_kwargs)
+                    except Exception as exc:
+                        try:
+                            arr, is_rgb = _read_rgb_stack_pattern(
+                                channel_pattern
+                            )
+                        except Exception:
+                            warnings.warn(
+                                f"Failed to read channel '{label}' from stack "
+                                f"pattern '{stack_pattern}': {exc}",
+                                stacklevel=2,
+                            )
+                            continue
+                        add_kwargs = {"name": Path(channel_pattern).name}
+                        if is_rgb:
+                            add_kwargs["rgb"] = True
+                        layer_type = "image"
+
+                    add_kwargs["name"] = (
+                        f"{add_kwargs.get('name', label)}[{label}]"
+                    )
+                    if not add_kwargs.get("rgb"):
+                        _maybe_set_viewer_3d(arr)
+                    layers.append((arr, add_kwargs, layer_type))
+            else:
+                # Single-layer stack read.
+                arr, add_kwargs, layer_type = _read_one(
+                    stack_pattern,
+                    mode=mode,
+                    stack_default_dim=stack_default_dim,
+                )
+                layers.append((arr, add_kwargs, layer_type))
         except Exception as e:
             warnings.warn(
                 f"Failed to read stack pattern '{stack_pattern}': {e}. "
