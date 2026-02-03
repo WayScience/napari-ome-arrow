@@ -925,6 +925,7 @@ def _channel_names_from_pattern(
     Returns:
         Channel names if a channel placeholder is found, otherwise None.
     """
+    # Matches numeric ranges like "000-015" or "1-10:2" inside <...>.
     num_range = re.compile(r"^(?P<a>\d+)\-(?P<b>\d+)(?::(?P<step>\d+))?$")
 
     def parse_choices(raw: str) -> list[str] | None:
