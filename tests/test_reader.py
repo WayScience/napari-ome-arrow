@@ -272,12 +272,12 @@ def test_reader_stack_pattern_nviz_dataset(monkeypatch: pytest.MonkeyPatch):
         layers = reader_mod.reader_function([str(p) for p in files])
 
     assert len(layers) == 2
-    expected_labels = ["111", "222"]
+    expected_channels = ["111", "222"]
     for idx, (data, add_kwargs, layer_type) in enumerate(layers):
         assert layer_type == "image"
         assert data.ndim >= 3
         assert data.shape[-3] == 22
-        assert add_kwargs["name"].endswith(f"[{expected_labels[idx]}]")
+        assert add_kwargs["name"].endswith(f"[{expected_channels[idx]}]")
 
 
 def test_reader_stack_pattern_applies_scale_override(
