@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 import numpy as np
 import pyarrow as pa
@@ -33,12 +33,13 @@ LayerData = tuple[np.ndarray, dict[str, Any], str]
 
 
 def _maybe_set_viewer_3d(arr: np.ndarray) -> None:
-    """
-    If the array has a Z axis with size > 1, switch the current napari viewer
-    to 3D (ndisplay = 3).
+    """Switch the active napari viewer to 3D if the array has a Z-stack.
 
-    Assumes OME-Arrow's TCZYX convention or a subset, i.e., Z is always
-    the third-from-last axis. No-op if there's no active viewer.
+    Assumes OME-Arrow's TCZYX convention or a subset, i.e. Z is always the
+    third-from-last axis. No-op if there's no active viewer.
+
+    Args:
+        arr: Array to inspect for a Z dimension.
     """
     # Need at least (Z, Y, X)
     if arr.ndim < 3:
@@ -66,8 +67,17 @@ def _maybe_set_viewer_3d(arr: np.ndarray) -> None:
 
 
 def _normalize_image_type(value: Any) -> str | None:
+    """Normalize an image type hint to "image" or "labels".
+
+    Args:
+        value: Raw hint value from metadata or user input.
+
+    Returns:
+        "image", "labels", or None if it cannot be inferred.
+    """
     if value is None:
         return None
+    # Normalize arbitrary input to a comparable string token.
     text = str(value).strip().lower()
     if not text:
         return None
@@ -85,6 +95,15 @@ def _normalize_image_type(value: Any) -> str | None:
 
 
 def _infer_layer_mode_from_record(record: dict[str, Any]) -> str | None:
+    """Infer the layer mode from a parsed OME-Arrow record.
+
+    Args:
+        record: Parsed metadata record from OME-Arrow.
+
+    Returns:
+        "image", "labels", or None if no hint is present.
+    """
+    # Collect candidate metadata fields that may encode image type.
     candidates = []
     if "image_type" in record:
         candidates.append(record.get("image_type"))
@@ -99,6 +118,14 @@ def _infer_layer_mode_from_record(record: dict[str, Any]) -> str | None:
 
 
 def _infer_layer_mode_from_ome_arrow(obj: OMEArrow) -> str | None:
+    """Infer the layer mode from an OMEArrow object.
+
+    Args:
+        obj: OMEArrow instance to inspect.
+
+    Returns:
+        "image", "labels", or None if no hint is present.
+    """
     try:
         record = obj.data.as_py()
     except Exception:
@@ -111,6 +138,16 @@ def _infer_layer_mode_from_ome_arrow(obj: OMEArrow) -> str | None:
 def _infer_layer_mode_from_source(
     src: str, *, stack_default_dim: str | None = None
 ) -> str | None:
+    """Infer the layer mode by inspecting a data source path.
+
+    Args:
+        src: Source path or stack pattern.
+        stack_default_dim: Default dimension to use for stack patterns.
+
+    Returns:
+        "image", "labels", or None if inference fails.
+    """
+    # Quick path sniffing before attempting to instantiate OMEArrow.
     s = src.lower()
     p = Path(src)
     looks_stack = any(c in src for c in "<>*")
@@ -167,14 +204,25 @@ def _infer_layer_mode_from_source(
 def _get_layer_mode(
     sample_path: str, *, image_type_hint: str | None = None
 ) -> str:
-    """
-    Decide whether to load as 'image' or 'labels'.
+    """Decide whether to load as "image" or "labels".
 
     Priority:
-      1. NAPARI_OME_ARROW_LAYER_TYPE env var (image/labels)
-      2. If in a Qt GUI context, show a modal dialog asking the user
-      3. Otherwise, default to 'image'
+    1. `NAPARI_OME_ARROW_LAYER_TYPE` env var (image/labels).
+    2. If in a Qt GUI context, show a modal dialog asking the user.
+    3. Otherwise, default to "image".
+
+    Args:
+        sample_path: Path used for prompt labeling.
+        image_type_hint: Optional inferred mode from metadata.
+
+    Returns:
+        The selected mode, "image" or "labels".
+
+    Raises:
+        RuntimeError: If the environment variable is invalid or the user
+            cancels the dialog.
     """
+    # Env var override (used in headless/batch workflows).
     mode = os.environ.get("NAPARI_OME_ARROW_LAYER_TYPE")
     if mode is not None:
         mode = mode.lower()
@@ -184,6 +232,7 @@ def _get_layer_mode(
             f"Invalid NAPARI_OME_ARROW_LAYER_TYPE={mode!r}; expected 'image' or 'labels'."
         )
 
+    # Metadata hint (best effort).
     if image_type_hint in {"image", "labels"}:
         return image_type_hint
 
@@ -242,7 +291,14 @@ def _get_layer_mode(
 
 
 def _as_labels(arr: np.ndarray) -> np.ndarray:
-    """Convert any array into an integer label array."""
+    """Convert an array into an integer label array.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Array converted to an integer dtype suitable for labels.
+    """
     if arr.dtype.kind == "f":
         arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
         arr = np.round(arr).astype(np.int32, copy=False)
@@ -252,10 +308,18 @@ def _as_labels(arr: np.ndarray) -> np.ndarray:
 
 
 def _looks_like_ome_source(path_str: str) -> bool:
-    """Basic extension / pattern sniffing for OME-Arrow supported formats."""
+    """Check whether a path appears to be an OME-Arrow supported source.
+
+    Args:
+        path_str: Path or stack pattern string.
+
+    Returns:
+        True if the path looks like a supported source, otherwise False.
+    """
     s = path_str.strip().lower()
     p = Path(path_str)
 
+    # Bio-Formats-style stack patterns.
     looks_stack = any(c in path_str for c in "<>*")
     looks_zarr = (
         s.endswith((".ome.zarr", ".zarr"))
@@ -285,6 +349,7 @@ def _looks_like_ome_source(path_str: str) -> bool:
     looks_dir_stack = False
     if p.exists() and p.is_dir() and not looks_zarr:
         try:
+            # Heuristic: directory with multiple image-like files.
             stack_files = [
                 f
                 for f in p.iterdir()
@@ -319,9 +384,17 @@ def _looks_like_ome_source(path_str: str) -> bool:
 
 
 def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
-    """Return struct columns matching the OME-Arrow schema."""
+    """Find Parquet columns matching the OME-Arrow schema.
+
+    Args:
+        table: Parquet table to scan.
+
+    Returns:
+        Column names that match the OME-Arrow struct schema.
+    """
     import pyarrow as pa
 
+    # Match struct columns that exactly mirror the OME-Arrow schema.
     expected_fields = {f.name for f in OME_ARROW_STRUCT}
     names: list[str] = []
     for name, col in zip(table.column_names, table.columns, strict=False):
@@ -334,6 +407,17 @@ def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
 
 
 def _read_vortex_scalar(src: str) -> pa.StructScalar:
+    """Read a single OME-Vortex row as a struct scalar.
+
+    Args:
+        src: OME-Vortex file path.
+
+    Returns:
+        Struct scalar for the selected row and column.
+
+    Raises:
+        ImportError: If OME-Vortex support is not available.
+    """
     # Delegate Vortex parsing to ome-arrow, which handles the file format details.
     try:
         from ome_arrow.ingest import from_ome_vortex
@@ -344,6 +428,7 @@ def _read_vortex_scalar(src: str) -> pa.StructScalar:
             "'pip install \"napari-ome-arrow[vortex]\"'."
         ) from exc
 
+    # Allow column override for non-default schema names.
     override = os.environ.get(
         "NAPARI_OME_ARROW_VORTEX_COLUMN"
     ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
@@ -357,6 +442,14 @@ def _read_vortex_scalar(src: str) -> pa.StructScalar:
 
 
 def _vortex_row_out_of_range(exc: Exception) -> bool:
+    """Check whether a Vortex row exception indicates an out-of-range index.
+
+    Args:
+        exc: Exception raised by the Vortex reader.
+
+    Returns:
+        True if the error indicates an out-of-range row, otherwise False.
+    """
     if isinstance(exc, IndexError):
         return True
     msg = str(exc).lower()
@@ -364,9 +457,14 @@ def _vortex_row_out_of_range(exc: Exception) -> bool:
 
 
 def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
-    """
-    Specialized path for multi-row OME-Vortex:
-    create one layer per row and enable napari grid view.
+    """Read multi-row OME-Vortex data as a layer grid.
+
+    Args:
+        src: OME-Vortex file path.
+        mode: "image" or "labels".
+
+    Returns:
+        A list of layers if multi-row data is detected, otherwise None.
     """
     s = src.lower()
     if not (s.endswith((".ome.vortex", ".vortex"))):
@@ -377,6 +475,7 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
     except Exception:
         return None
 
+    # Reuse the parquet override env var for consistency.
     override = os.environ.get(
         "NAPARI_OME_ARROW_VORTEX_COLUMN"
     ) or os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
@@ -405,6 +504,7 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
     layers: list[LayerData] = []
 
     def _append_layer(idx: int, scalar: pa.StructScalar) -> None:
+        # Per-row conversion with best-effort error handling.
         try:
             arr = OMEArrow(scalar).export(
                 how="numpy", dtype=np.uint16, strict=False
@@ -416,6 +516,7 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
             )
             return
 
+        # Layer metadata uses row index for unique naming.
         add_kwargs: dict[str, Any] = {
             "name": f"{Path(src).name}[{selected}][row {idx}]"
         }
@@ -465,7 +566,11 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
 
 
 def _enable_grid(n_layers: int) -> None:
-    """Switch current viewer into grid view when possible."""
+    """Switch the current viewer into grid view when possible.
+
+    Args:
+        n_layers: Number of layers to arrange in the grid.
+    """
     if n_layers <= 1:
         return
     try:
@@ -488,9 +593,14 @@ def _enable_grid(n_layers: int) -> None:
 
 
 def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
-    """
-    Specialized path for multi-row OME-Parquet:
-    create one layer per row and enable napari grid view.
+    """Read multi-row OME-Parquet data as a layer grid.
+
+    Args:
+        src: OME-Parquet file path.
+        mode: "image" or "labels".
+
+    Returns:
+        A list of layers if multi-row data is detected, otherwise None.
     """
     s = src.lower()
     if not (s.endswith((".ome.parquet", ".parquet", ".pq"))):
@@ -502,11 +612,13 @@ def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
     except Exception:
         return None
 
+    # Read all rows; per-row layers are assembled below.
     table = pq.read_table(src)
     ome_cols = _find_ome_parquet_columns(table)
     if not ome_cols or table.num_rows <= 1:
         return None
 
+    # Column override for multi-struct tables.
     override = os.environ.get("NAPARI_OME_ARROW_PARQUET_COLUMN")
     if override:
         matched = [c for c in ome_cols if c.lower() == override.lower()]
@@ -565,7 +677,14 @@ def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
 def _collect_stack_files(
     paths: Sequence[str],
 ) -> tuple[list[Path], Path] | None:
-    """Return stack candidate files and their shared folder, if any."""
+    """Collect stack candidates and their shared folder if applicable.
+
+    Args:
+        paths: Input paths passed by napari.
+
+    Returns:
+        A tuple of (files, folder) or None if stack detection fails.
+    """
     if any(any(c in p for c in "<>*") for p in paths):
         return None
 
@@ -593,10 +712,19 @@ def _collect_stack_files(
 
 
 def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
-    """Suggest a Bio-Formats-style stack pattern string for files."""
+    """Suggest a stack pattern string for a set of files.
+
+    Args:
+        files: Files to analyze for a stack pattern.
+        folder: Folder that contains the files.
+
+    Returns:
+        Suggested stack pattern string.
+    """
     if not files:
         return str(folder / ".*")
 
+    # Prefer the most common suffix to avoid mixing file types.
     suffix_counts = Counter(p.suffix.lower() for p in files)
     preferred_suffix = (
         suffix_counts.most_common(1)[0][0] if suffix_counts else ""
@@ -607,6 +735,7 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
     names = [p.name for p in candidates]
 
     def _unique_in_order(values: Sequence[str]) -> list[str]:
+        # Preserve original ordering for channel tokens.
         seen = set()
         ordered: list[str] = []
         for value in values:
@@ -647,6 +776,7 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
                 "<" + ",".join(str(v).zfill(z_width) for v in z_unique) + ">"
             )
 
+        # Separate channel tokens from Z tokens when possible.
         pre_prefix = os.path.commonprefix(pre_parts)
         pre_suffix = os.path.commonprefix([p[::-1] for p in pre_parts])[::-1]
         if pre_prefix:
@@ -674,6 +804,7 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
     if suggestion is not None:
         return str(folder / suggestion)
 
+    # Generic numeric token scanning when no explicit Z token exists.
     split_names = [re.split(r"(\d+)", name) for name in names]
     if split_names and all(
         len(parts) == len(split_names[0]) for parts in split_names
@@ -731,6 +862,14 @@ def _suggest_stack_pattern(files: Sequence[Path], folder: Path) -> str:
 
 
 def _stack_default_dim_for_pattern(pattern: str) -> str:
+    """Infer the default dimension token for a stack pattern.
+
+    Args:
+        pattern: Stack pattern string.
+
+    Returns:
+        Default dimension token ("Z" or "C").
+    """
     dim_tokens = {"z", "zs", "sec", "fp", "focal", "focalplane"}
     for idx, ch in enumerate(pattern):
         if ch != "<":
@@ -746,6 +885,14 @@ def _stack_default_dim_for_pattern(pattern: str) -> str:
 
 
 def _detect_dim_token(before_text: str) -> str | None:
+    """Detect a dimension token from text preceding a placeholder.
+
+    Args:
+        before_text: Text before the placeholder in the pattern.
+
+    Returns:
+        Dimension token ("C", "T", "Z", "S") or None if not detected.
+    """
     match = re.search(r"([A-Za-z]+)$", before_text)
     if not match:
         return None
@@ -764,9 +911,19 @@ def _detect_dim_token(before_text: str) -> str | None:
 def _channel_names_from_pattern(
     pattern: str, default_dim_for_unspecified: str
 ) -> list[str] | None:
+    """Extract channel names from a stack pattern if available.
+
+    Args:
+        pattern: Stack pattern string.
+        default_dim_for_unspecified: Default dimension token to use.
+
+    Returns:
+        Channel names if a channel placeholder is found, otherwise None.
+    """
     num_range = re.compile(r"^(?P<a>\d+)\-(?P<b>\d+)(?::(?P<step>\d+))?$")
 
     def parse_choices(raw: str) -> list[str] | None:
+        # Support comma lists or numeric ranges within angle brackets.
         raw = raw.strip()
         if not raw:
             return None
@@ -804,6 +961,16 @@ def _channel_names_from_pattern(
 def _replace_channel_placeholder(
     pattern: str, channel_value: str, default_dim_for_unspecified: str
 ) -> str:
+    """Replace the first channel placeholder in a pattern.
+
+    Args:
+        pattern: Stack pattern string.
+        channel_value: Channel value to insert.
+        default_dim_for_unspecified: Default dimension token to use.
+
+    Returns:
+        Pattern string with the channel placeholder replaced.
+    """
     out: list[str] = []
     i = 0
     replaced = False
@@ -828,9 +995,18 @@ def _replace_channel_placeholder(
 
 
 def _files_from_pattern(pattern: str) -> list[Path]:
+    """List files that match a stack pattern.
+
+    Args:
+        pattern: Stack pattern string.
+
+    Returns:
+        Files matching the pattern, sorted by Z-like tokens when possible.
+    """
     p = Path(pattern)
     folder = p.parent
     name = p.name
+    # Convert <...> placeholders to a wildcard regex.
     regex = re.escape(name)
     regex = re.sub(r"\\<[^>]+\\>", r"[^/]+", regex)
     compiled = re.compile(f"^{regex}$")
@@ -838,6 +1014,7 @@ def _files_from_pattern(pattern: str) -> list[Path]:
     matched = [f for f in candidates if compiled.match(f.name)]
 
     def z_key(path: Path) -> tuple[int, str]:
+        # Prefer Z-like numeric ordering when present.
         match = re.search(r"Z[S]?(\d+)", path.name)
         return (int(match.group(1)) if match else -1, path.name)
 
@@ -845,6 +1022,19 @@ def _files_from_pattern(pattern: str) -> list[Path]:
 
 
 def _read_rgb_stack_pattern(pattern: str) -> tuple[np.ndarray, bool]:
+    """Read a stack pattern using RGB-aware fallbacks.
+
+    Args:
+        pattern: Stack pattern string.
+
+    Returns:
+        Tuple of (stack array, is_rgb).
+
+    Raises:
+        ImportError: If required optional dependencies are missing.
+        FileNotFoundError: If no files match the pattern.
+        ValueError: If frame shapes are unsupported or inconsistent.
+    """
     try:
         from bioio import BioImage
         from bioio_ome_tiff import Reader as OMEReader
@@ -854,6 +1044,7 @@ def _read_rgb_stack_pattern(pattern: str) -> tuple[np.ndarray, bool]:
             "RGB stack fallback requires bioio and bioio_tifffile."
         ) from exc
 
+    # Try to load a stack using image readers that can report RGB frames.
     files = _files_from_pattern(pattern)
     if not files:
         raise FileNotFoundError(f"No files matched pattern: {pattern}")
@@ -861,6 +1052,7 @@ def _read_rgb_stack_pattern(pattern: str) -> tuple[np.ndarray, bool]:
     shape_ref: tuple[int, ...] | None = None
 
     def _read_frame(fpath: Path) -> tuple[np.ndarray, bool]:
+        # Normalize RGB channel placement to last axis.
         reader = (
             OMEReader
             if fpath.suffix.lower() in (".ome.tif", ".ome.tiff")
@@ -909,6 +1101,16 @@ def _read_rgb_stack_pattern(pattern: str) -> tuple[np.ndarray, bool]:
 def _strip_channel_axis(
     arr: np.ndarray, add_kwargs: dict[str, Any]
 ) -> tuple[np.ndarray, dict[str, Any]]:
+    """Strip the channel axis from an array if configured.
+
+    Args:
+        arr: Input array.
+        add_kwargs: Layer kwargs that may include "channel_axis".
+
+    Returns:
+        Tuple of (array without channel axis, updated kwargs).
+    """
+    # Only strip when channel_axis is present and valid.
     channel_axis = add_kwargs.pop("channel_axis", None)
     if channel_axis is None:
         return arr, add_kwargs
@@ -923,10 +1125,14 @@ def _strip_channel_axis(
 
 
 def _prompt_stack_pattern(files: Sequence[Path], folder: Path) -> str | None:
-    """
-    Prompt for a stack pattern when multiple files are detected.
+    """Prompt for a stack pattern when multiple files are detected.
 
-    Returns a pattern string or None to skip stack parsing.
+    Args:
+        files: Stack candidate files.
+        folder: Folder containing the files.
+
+    Returns:
+        A pattern string or None to skip stack parsing.
     """
     suggested = _suggest_stack_pattern(files, folder)
 
@@ -968,6 +1174,18 @@ def _prompt_stack_pattern(files: Sequence[Path], folder: Path) -> str | None:
 
 
 def _parse_stack_scale(text: str) -> tuple[float, ...]:
+    """Parse a stack scale string into numeric values.
+
+    Args:
+        text: Comma- or space-separated scale values.
+
+    Returns:
+        Tuple of scale values.
+
+    Raises:
+        ValueError: If the scale is invalid or has the wrong length.
+    """
+    # Accept comma- or space-delimited values.
     tokens = [t for t in re.split(r"[,\s]+", text.strip()) if t]
     if len(tokens) not in (3, 5):
         raise ValueError("Expected 3 values (Z,Y,X) or 5 values (T,C,Z,Y,X).")
@@ -978,12 +1196,28 @@ def _parse_stack_scale(text: str) -> tuple[float, ...]:
 
 
 def _format_stack_scale(values: Sequence[float]) -> str:
+    """Format scale values as a comma-separated string.
+
+    Args:
+        values: Scale values.
+
+    Returns:
+        String representation of the scale values.
+    """
     return ",".join(f"{v:g}" for v in values)
 
 
 def _scale_from_ome_arrow(
     obj: OMEArrow,
 ) -> tuple[float, float, float] | None:
+    """Extract Z/Y/X scale from OME-Arrow metadata.
+
+    Args:
+        obj: OMEArrow instance to inspect.
+
+    Returns:
+        (z, y, x) scale tuple, or None if unavailable or defaulted to 1.0.
+    """
     try:
         record = obj.data.as_py()
         pixels_meta = record.get("pixels_meta", {}) if record else {}
@@ -1009,6 +1243,15 @@ def _scale_from_ome_arrow(
 def _prompt_stack_scale(
     sample_path: str, default_scale: Sequence[float] | None
 ) -> tuple[float, ...] | None:
+    """Prompt for stack scale values when in a Qt context.
+
+    Args:
+        sample_path: Path used for prompt labeling.
+        default_scale: Default scale to prefill or return on cancel.
+
+    Returns:
+        Scale tuple or None if no override is provided.
+    """
     try:
         from qtpy import QtWidgets
     except Exception:
@@ -1054,7 +1297,17 @@ def _prompt_stack_scale(
 def _infer_stack_scale_from_pattern(
     pattern: str, stack_default_dim: str | None
 ) -> tuple[float, float, float] | None:
+    """Infer scale from a stack pattern using OME-Arrow metadata.
+
+    Args:
+        pattern: Stack pattern string.
+        stack_default_dim: Default dimension token for the stack.
+
+    Returns:
+        (z, y, x) scale tuple, or None if inference fails.
+    """
     try:
+        # Use ome-arrow ingestion to infer physical size from a stack.
         scalar = from_stack_pattern_path(
             pattern,
             default_dim_for_unspecified=stack_default_dim,
@@ -1068,6 +1321,17 @@ def _infer_stack_scale_from_pattern(
 
 
 def _normalize_stack_scale(scale: Sequence[float]) -> tuple[float, ...]:
+    """Normalize a stack scale into TCZYX order.
+
+    Args:
+        scale: Scale values in Z,Y,X or T,C,Z,Y,X order.
+
+    Returns:
+        Normalized scale values in T,C,Z,Y,X order.
+
+    Raises:
+        ValueError: If the input has an unsupported length.
+    """
     if len(scale) == 3:
         z, y, x = scale
         return (1.0, 1.0, z, y, x)
@@ -1082,6 +1346,18 @@ def _scale_for_array(
     add_kwargs: dict[str, Any],
     scale: Sequence[float],
 ) -> tuple[float, ...] | None:
+    """Compute the scale tuple appropriate for a specific array and mode.
+
+    Args:
+        arr: Data array to be displayed.
+        mode: "image" or "labels".
+        add_kwargs: Layer kwargs, possibly including "channel_axis".
+        scale: Scale values in Z,Y,X or T,C,Z,Y,X order.
+
+    Returns:
+        Scale tuple aligned to the array's dimensionality, or None.
+    """
+    # Normalize scale to TCZYX, then trim per array dimensionality.
     scale_tczyx = _normalize_stack_scale(scale)
     channel_axis = add_kwargs.get("channel_axis")
     if arr.ndim == 5:
@@ -1122,11 +1398,16 @@ def _scale_for_array(
 # --------------------------------------------------------------------- #
 
 
-def napari_get_reader(path: Union[PathLike, Sequence[PathLike]]):
-    """
-    Napari plugin hook: return a reader callable if this plugin can read `path`.
+def napari_get_reader(
+    path: Union[PathLike, Sequence[PathLike]]
+) -> Callable[[Union[PathLike, Sequence[PathLike]]], list[LayerData]] | None:
+    """Return a reader callable for napari if the path is supported.
 
-    This MUST return a function object (e.g. `reader_function`) or None.
+    Args:
+        path: A single path or a sequence of paths provided by napari.
+
+    Returns:
+        Reader callable if the path is supported, otherwise None.
     """
     # napari may pass a list/tuple or a single path
     first = str(path[0] if isinstance(path, (list, tuple)) else path).strip()
@@ -1148,12 +1429,21 @@ def _read_one(
     stack_default_dim: str | None = None,
     stack_scale_override: Sequence[float] | None = None,
 ) -> LayerData:
-    """
-    Read a single source into (data, add_kwargs, layer_type),
-    obeying `mode` = 'image' or 'labels'.
+    """Read a single source into a napari layer tuple.
 
-    If `stack_default_dim` is provided and `src` is a stack pattern,
-    placeholders without explicit tokens will be treated as that dimension.
+    Args:
+        src: Source path or stack pattern.
+        mode: "image" or "labels".
+        stack_default_dim: Default dimension to use for stack patterns.
+        stack_scale_override: Optional scale override for stack patterns.
+
+    Returns:
+        Tuple of (data, add_kwargs, layer_type).
+
+    Raises:
+        ValueError: If the source cannot be parsed or inferred.
+        ImportError: If optional dependencies are required but missing.
+        FileNotFoundError: If referenced stack files are missing.
     """
     s = src.lower()
     p = Path(src)
@@ -1212,6 +1502,7 @@ def _read_one(
         scale_override: tuple[float, ...] | None = None
         inferred_scale = _scale_from_ome_arrow(obj)
         if looks_stack:
+            # Stack scales are optional and can be provided via env or prompt.
             if stack_scale_override is not None:
                 scale_override = tuple(stack_scale_override)
             else:
@@ -1232,6 +1523,7 @@ def _read_one(
                     )
 
         # Recover from accidental 1D flatten
+        # Recover from accidental 1D flatten by using metadata shape.
         if getattr(arr, "ndim", 0) == 1:
             T, C, Z, Y, X = info.get("shape", (1, 1, 1, 0, 0))
             if Y and X and arr.size == Y * X:
@@ -1262,6 +1554,7 @@ def _read_one(
         _maybe_set_viewer_3d(arr)
 
         if looks_stack:
+            # Stack scale can be inferred or user-provided.
             scale_override = (
                 scale_override
                 if scale_override is not None
@@ -1285,6 +1578,7 @@ def _read_one(
 
     # ---- bare .npy fallback -----------------------------------------
     if looks_npy:
+        # Minimal fallback for plain numpy arrays.
         arr = np.load(src)
         if arr.ndim == 1:
             n = int(np.sqrt(arr.size))
@@ -1318,17 +1612,26 @@ def _read_one(
 def reader_function(
     path: Union[PathLike, Sequence[PathLike]],
 ) -> list[LayerData]:
-    """
-    The actual reader callable napari will use.
+    """Read one or more paths into napari layer data.
 
-    It reads one or more paths, prompting the user (or using the env var)
-    to decide 'image' vs 'labels', and returns a list of LayerData tuples.
+    The user may be prompted (or an env var used) to decide "image" vs
+    "labels".
+
+    Args:
+        path: A single path or a sequence of paths provided by napari.
+
+    Returns:
+        List of layer tuples for napari.
+
+    Raises:
+        ValueError: If no readable inputs are found.
     """
     paths: list[str] = [
         str(p) for p in (path if isinstance(path, (list, tuple)) else [path])
     ]
     layers: list[LayerData] = []
 
+    # Offer a stack pattern prompt when multiple compatible files are present.
     stack_selection = _collect_stack_files(paths)
     stack_pattern = None
     if stack_selection is not None:
@@ -1358,6 +1661,7 @@ def reader_function(
             )
             resolved_stack_scale = None
             if mode == "image" and channel_names and len(channel_names) > 1:
+                # Split each channel into separate layers for stack patterns.
                 inferred_stack_scale = _infer_stack_scale_from_pattern(
                     stack_pattern, stack_default_dim
                 )
@@ -1418,6 +1722,7 @@ def reader_function(
                         _maybe_set_viewer_3d(arr)
                     layers.append((arr, add_kwargs, layer_type))
             else:
+                # Single-layer stack read.
                 arr, add_kwargs, layer_type = _read_one(
                     stack_pattern,
                     mode=mode,
