@@ -32,7 +32,17 @@ def _normalize_image_type(value: Any) -> str | None:
     if text in {"image", "intensity", "raw"} or "image" in text:
         return "image"
     if (
-        text in {"labels", "label", "mask", "masks", "segmentation", "seg", "outlines", "outline"}
+        text
+        in {
+            "labels",
+            "label",
+            "mask",
+            "masks",
+            "segmentation",
+            "seg",
+            "outlines",
+            "outline",
+        }
         or "label" in text
         or "mask" in text
         or "seg" in text

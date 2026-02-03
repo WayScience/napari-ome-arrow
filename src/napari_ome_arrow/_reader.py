@@ -16,13 +16,22 @@ import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from ._reader_infer import (
+from ._reader_infer import (  # noqa: F401
+    _infer_layer_mode_from_record,
     _infer_layer_mode_from_source,
     _looks_like_ome_source,
+    _normalize_image_type,
 )
-from ._reader_napari import _maybe_set_viewer_3d, _strip_channel_axis
-from ._reader_omearrow import _read_one, _read_parquet_rows, _read_vortex_rows
-from ._reader_stack import (
+from ._reader_napari import (  # noqa: F401
+    _maybe_set_viewer_3d,
+    _strip_channel_axis,
+)
+from ._reader_omearrow import (  # noqa: F401
+    _read_one,
+    _read_parquet_rows,
+    _read_vortex_rows,
+)
+from ._reader_stack import (  # noqa: F401
     _channel_names_from_pattern,
     _collect_stack_files,
     _infer_stack_scale_from_pattern,
@@ -32,8 +41,33 @@ from ._reader_stack import (
     _read_rgb_stack_pattern,
     _replace_channel_placeholder,
     _stack_default_dim_for_pattern,
+    _suggest_stack_pattern,
 )
 from ._reader_types import LayerData, PathLike
+
+__all__ = [
+    "napari_get_reader",
+    "reader_function",
+    "_infer_layer_mode_from_record",
+    "_infer_layer_mode_from_source",
+    "_looks_like_ome_source",
+    "_normalize_image_type",
+    "_maybe_set_viewer_3d",
+    "_strip_channel_axis",
+    "_read_one",
+    "_read_parquet_rows",
+    "_read_vortex_rows",
+    "_channel_names_from_pattern",
+    "_collect_stack_files",
+    "_infer_stack_scale_from_pattern",
+    "_parse_stack_scale",
+    "_prompt_stack_pattern",
+    "_prompt_stack_scale",
+    "_read_rgb_stack_pattern",
+    "_replace_channel_placeholder",
+    "_stack_default_dim_for_pattern",
+    "_suggest_stack_pattern",
+]
 
 # --------------------------------------------------------------------- #
 #  Mode selection (env var + GUI prompt)
