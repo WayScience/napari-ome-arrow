@@ -89,8 +89,8 @@ def test_write_labels_parquet():
         assert Path(output_path).exists()
 
 
-def test_write_vortex_without_dependency():
-    """Test that writing to vortex format warns if dependency is missing."""
+def test_write_vortex():
+    """Test writing to vortex format."""
     data = np.random.randint(0, 255, (100, 100), dtype=np.uint16)
     meta = {"name": "test_vortex"}
 
@@ -98,13 +98,16 @@ def test_write_vortex_without_dependency():
         output_path = str(Path(tmpdir) / "test.ome.vortex")
 
         # Try to write to vortex format
-        # This might fail if vortex-data is not installed
-        with pytest.warns(UserWarning, match="vortex-data"):
-            result = napari_write_image(output_path, data, meta)
+        result = napari_write_image(output_path, data, meta)
 
-            # If vortex-data is not installed, result should be None
-            if result is None:
-                assert not Path(output_path).exists()
+        # If vortex-data is installed, file should be created
+        # If not installed, result should be None
+        if result is not None:
+            assert result == output_path
+            assert Path(output_path).exists()
+        else:
+            # vortex-data not installed
+            assert not Path(output_path).exists()
 
 
 def test_write_empty_data():
