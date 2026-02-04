@@ -52,15 +52,17 @@ def _extract_metadata_from_napari(
             metadata["physical_size_z"] = float(scale[-3])
 
     # Extract channel names if available
-    if "channel_axis" in meta and meta.get("channel_axis") is not None:
-        # If there's a channel axis, try to get channel names
-        if hasattr(data, "shape"):
-            channel_axis = meta["channel_axis"]
-            if channel_axis < len(data.shape):
-                n_channels = data.shape[channel_axis]
-                metadata["channel_names"] = [
-                    f"Channel {i}" for i in range(n_channels)
-                ]
+    if (
+        "channel_axis" in meta
+        and meta.get("channel_axis") is not None
+        and hasattr(data, "shape")
+    ):
+        channel_axis = meta["channel_axis"]
+        if channel_axis < len(data.shape):
+            n_channels = data.shape[channel_axis]
+            metadata["channel_names"] = [
+                f"Channel {i}" for i in range(n_channels)
+            ]
 
     return metadata
 
