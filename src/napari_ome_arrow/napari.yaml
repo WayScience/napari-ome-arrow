@@ -5,6 +5,12 @@ contributions:
     - id: napari-ome-arrow.get_reader
       python_name: napari_ome_arrow._reader:napari_get_reader
       title: Open OME-Arrow data
+    - id: napari-ome-arrow.write_image
+      python_name: napari_ome_arrow._writer:napari_write_image
+      title: Save image as OME-Arrow
+    - id: napari-ome-arrow.write_labels
+      python_name: napari_ome_arrow._writer:napari_write_labels
+      title: Save labels as OME-Arrow
   readers:
     - command: napari-ome-arrow.get_reader
       filename_patterns:
@@ -24,3 +30,16 @@ contributions:
         - "*.ome.zarr"
         - "*.zarr"
       accepts_directories: true
+  writers:
+    - command: napari-ome-arrow.write_image
+      layer_types:
+        - image
+      filename_extensions:
+        - ".ome.parquet"
+        - ".ome.vortex"
+    - command: napari-ome-arrow.write_labels
+      layer_types:
+        - labels
+      filename_extensions:
+        - ".ome.parquet"
+        - ".ome.vortex"
