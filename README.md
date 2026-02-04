@@ -23,6 +23,9 @@ It provides a single, explicit pathway for loading OME-style bioimage data:
 - ✅ **Unified reader via OMEArrow**
   All supported formats are loaded through `OME-Arrow`, which normalizes data into a common **TCZYX**-like representation.
 
+- ✅ **OME-Arrow export support**
+  Save napari image and labels layers to **OME-Parquet** (`.ome.parquet`) and **OME-Vortex** (`.ome.vortex`) formats directly from the napari GUI or programmatically.
+
 - ✅ **Explicit image vs labels mode**
   This plugin never guesses whether your data are intensities or segmentation masks. You must tell it:
 
@@ -99,6 +102,8 @@ pip install "napari-ome-arrow[vortex]"
 
 ### From the napari GUI
 
+#### Opening files
+
 1. Install the plugin (see above).
 1. Start napari.
 1. Drag and drop an OME-TIFF, OME-Zarr, OME-Parquet, OME-Vortex file, a stack pattern, or a multi-select stack (e.g. `img_000.tif` ... `img_123.tif`) into the viewer.
@@ -110,6 +115,26 @@ The plugin will:
 - map channels and axes appropriately, and
 - automatically switch to 3D if there is a Z-stack.
 - When multiple files look like a numbered stack, treat them as a single stack rather than independent layers.
+
+#### Saving files
+
+To save a napari image or labels layer to OME-Parquet or OME-Vortex format:
+
+1. Select the layer you want to save in the napari viewer.
+1. Go to **File → Save Selected Layer(s)...** or use keyboard shortcut **Ctrl+S** (Cmd+S on macOS).
+1. In the file dialog, choose a filename ending in `.ome.parquet` or `.ome.vortex`.
+1. Click **Save**.
+
+The writer will:
+
+- automatically detect dimension order from the array shape,
+- preserve layer metadata (name, scale information), and
+- save in the selected OME-Arrow format.
+
+**Note:** OME-Vortex export requires the optional `vortex-data` package. Install with:
+```bash
+pip install "napari-ome-arrow[vortex]"
+```
 
 ### From the command line
 
@@ -132,6 +157,25 @@ NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/z<000-120>.tif"
 
 # Prefill stack voxel spacing for multi-file stacks (use a pattern or glob on CLI)
 NAPARI_OME_ARROW_STACK_SCALE=1.0,0.108,0.108 napari "stack/img_<000-120>.tif"
+```
+
+### Programmatic usage
+
+You can also use the writer functions directly in Python:
+
+```python
+import numpy as np
+from napari_ome_arrow import napari_write_image, napari_write_labels
+
+# Write an image to OME-Parquet
+image_data = np.random.randint(0, 255, (100, 100), dtype=np.uint16)
+metadata = {"name": "my_image", "scale": (0.5, 0.5)}
+napari_write_image("output.ome.parquet", image_data, metadata)
+
+# Write labels to OME-Vortex
+labels_data = np.random.randint(0, 10, (100, 100), dtype=np.uint32)
+metadata = {"name": "my_labels"}
+napari_write_labels("segmentation.ome.vortex", labels_data, metadata)
 ```
 
 ## Contributing
