@@ -96,6 +96,47 @@ def _determine_dim_order(data: np.ndarray) -> str:
     raise ValueError(f"Unsupported number of dimensions: {ndim}")
 
 
+def _write_ome_format(ome_struct: Any, path: str) -> str | None:
+    """Write OME-Arrow struct to appropriate format based on file extension.
+
+    Args:
+        ome_struct: OME-Arrow StructScalar to write.
+        path: Output file path.
+
+    Returns:
+        Path to the written file, or None if writing failed.
+    """
+    path_lower = path.lower()
+
+    try:
+        if path_lower.endswith((".ome.parquet", ".parquet", ".pq")):
+            to_ome_parquet(ome_struct, path)
+            return path
+        if path_lower.endswith((".ome.vortex", ".vortex")):
+            try:
+                to_ome_vortex(ome_struct, path)
+                return path
+            except ImportError:
+                warnings.warn(
+                    "Writing to .ome.vortex requires the 'vortex-data' package. "
+                    "Install with: pip install napari-ome-arrow[vortex]",
+                    stacklevel=3,
+                )
+                return None
+
+        warnings.warn(
+            f"Unsupported file extension for path: {path}",
+            stacklevel=3,
+        )
+        return None
+    except Exception as e:
+        warnings.warn(
+            f"Failed to write to {path}: {e}",
+            stacklevel=3,
+        )
+        return None
+
+
 def napari_write_image(
     path: str, data: Any, meta: dict
 ) -> str | list[str] | None:
@@ -153,28 +194,8 @@ def napari_write_image(
             channel_names=ome_meta.get("channel_names"),
         )
 
-        # Write to appropriate format based on extension
-        path_lower = path.lower()
-        if path_lower.endswith((".ome.parquet", ".parquet", ".pq")):
-            to_ome_parquet(ome_struct, path)
-        elif path_lower.endswith((".ome.vortex", ".vortex")):
-            try:
-                to_ome_vortex(ome_struct, path)
-            except ImportError:
-                warnings.warn(
-                    "Writing to .ome.vortex requires the 'vortex-data' package. "
-                    "Install with: pip install napari-ome-arrow[vortex]",
-                    stacklevel=2,
-                )
-                return None
-        else:
-            warnings.warn(
-                f"Unsupported file extension for path: {path}",
-                stacklevel=2,
-            )
-            return None
-
-        return path
+        # Write to file
+        return _write_ome_format(ome_struct, path)
 
     except Exception as e:
         warnings.warn(
@@ -238,28 +259,8 @@ def napari_write_labels(
             clamp_to_uint16=False,  # Don't clamp labels
         )
 
-        # Write to appropriate format
-        path_lower = path.lower()
-        if path_lower.endswith((".ome.parquet", ".parquet", ".pq")):
-            to_ome_parquet(ome_struct, path)
-        elif path_lower.endswith((".ome.vortex", ".vortex")):
-            try:
-                to_ome_vortex(ome_struct, path)
-            except ImportError:
-                warnings.warn(
-                    "Writing to .ome.vortex requires the 'vortex-data' package. "
-                    "Install with: pip install napari-ome-arrow[vortex]",
-                    stacklevel=2,
-                )
-                return None
-        else:
-            warnings.warn(
-                f"Unsupported file extension for path: {path}",
-                stacklevel=2,
-            )
-            return None
-
-        return path
+        # Write to file
+        return _write_ome_format(ome_struct, path)
 
     except Exception as e:
         warnings.warn(
