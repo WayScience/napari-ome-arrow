@@ -35,17 +35,15 @@ def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
     """
     import pyarrow as pa
 
-    # Core required fields that identify an OME-Arrow column.
-    # This is more lenient than exact schema matching to support
-    # different versions of the OME-Arrow schema.
-    core_fields = {"type", "version", "pixels_meta"}
+    # Match struct columns that exactly mirror the OME-Arrow schema.
+    expected_fields = {f.name for f in OME_ARROW_STRUCT}
     names: list[str] = []
     for name, col in zip(table.column_names, table.columns, strict=False):
-        if pa.types.is_struct(col.type):
-            fields = {f.name for f in col.type}
-            # Check if it has all core fields (subset match)
-            if core_fields.issubset(fields):
-                names.append(name)
+        if (
+            pa.types.is_struct(col.type)
+            and {f.name for f in col.type} == expected_fields
+        ):
+            names.append(name)
     return names
 
 
