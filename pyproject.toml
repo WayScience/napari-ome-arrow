@@ -33,7 +33,6 @@ dependencies = [
   "qtpy>=2.4",
   "scikit-image",
 ]
-
 # If you want a convenience "everything" extra, keep it backend-agnostic:
 optional-dependencies.all = [ "napari", "qtpy>=2.4" ]
 optional-dependencies.pyqt6 = [ "napari[pyqt6]", "pyqt6>=6.6", "qtpy>=2.4" ]
@@ -41,9 +40,9 @@ optional-dependencies.pyqt6 = [ "napari[pyqt6]", "pyqt6>=6.6", "qtpy>=2.4" ]
 optional-dependencies.pyside6 = [ "napari[pyside6]", "pyside6>=6.6", "qtpy>=2.4" ]
 optional-dependencies.vortex = [ "vortex-data" ]
 urls."Bug Tracker" = "https://github.com/wayscience/napari-ome-arrow/issues"
-urls."Documentation" = "https://github.com/wayscience/napari-ome-arrow#README.md"
 urls."Source Code" = "https://github.com/wayscience/napari-ome-arrow"
 urls."User Support" = "https://github.com/wayscience/napari-ome-arrow/issues"
+urls.Documentation = "https://github.com/wayscience/napari-ome-arrow#README.md"
 entry-points."napari.manifest".napari-ome-arrow = "napari_ome_arrow:napari.yaml"
 
 [dependency-groups]
@@ -58,13 +57,9 @@ dev = [
 
 [tool.setuptools]
 include-package-data = true
-
-[tool.setuptools.package-data]
-"*" = [ "*.yaml" ]
-
-[tool.setuptools.packages.find]
-where = [ "src" ]
-exclude = [ "*.tests", "*.tests.*", "tests*" ]
+package-data."*" = [ "*.yaml" ]
+packages.find.where = [ "src" ]
+packages.find.exclude = [ "*.tests", "*.tests.*", "tests*" ]
 
 [tool.setuptools_scm]
 write_to = "src/napari_ome_arrow/_version.py"
@@ -72,7 +67,7 @@ fallback_version = "0.0.1+nogit"
 
 [tool.black]
 line-length = 79
-target-version = [ 'py310', 'py311', 'py312', 'py313' ]
+target-version = [ "py310", "py311", "py312", "py313" ]
 
 [tool.ruff]
 line-length = 79
@@ -111,7 +106,7 @@ lint.select = [
   "PIE", # flake8-pie
   "SIM", # flake8-simplify
   "UP",  # pyupgrade
-  "W",   #flake8
+  "W",   # flake8
 ]
 lint.ignore = [
   "BLE001",
@@ -120,12 +115,12 @@ lint.ignore = [
   "UP007",
 ]
 
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = [ "-ra", "--showlocals", "--strict-markers", "--strict-config" ]
-xfail_strict = true
-log_cli_level = "INFO"
-testpaths = [ "tests" ]
+[tool.pytest]
+ini_options.minversion = "6.0"
+ini_options.addopts = [ "-ra", "--showlocals", "--strict-markers", "--strict-config" ]
+ini_options.xfail_strict = true
+ini_options.log_cli_level = "INFO"
+ini_options.testpaths = [ "tests" ]
 
 [tool.vulture]
 min_confidence = 90
