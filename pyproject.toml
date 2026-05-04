@@ -53,6 +53,7 @@ dev = [
   "pytest",
   "pytest-qt>=4.4",
   "qtpy>=2.4",
+  "vortex-data",
 ]
 
 [tool.setuptools]

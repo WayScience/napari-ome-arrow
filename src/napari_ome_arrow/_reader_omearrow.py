@@ -35,15 +35,22 @@ def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
     """
     import pyarrow as pa
 
-    # Match struct columns that exactly mirror the OME-Arrow schema.
+    # Prefer struct columns that exactly mirror the OME-Arrow schema.
     expected_fields = {f.name for f in OME_ARROW_STRUCT}
     names: list[str] = []
+    struct_names: list[str] = []
     for name, col in zip(table.column_names, table.columns, strict=False):
-        if (
-            pa.types.is_struct(col.type)
-            and {f.name for f in col.type} == expected_fields
-        ):
+        if not pa.types.is_struct(col.type):
+            continue
+        struct_names.append(name)
+        if {f.name for f in col.type} == expected_fields:
             names.append(name)
+
+    # Compatibility fallback: some ome-arrow/pyarrow combinations expose
+    # equivalent struct payloads with non-canonical field layout. In that case,
+    # treat struct columns as candidates and let row decoding decide.
+    if not names and struct_names:
+        return struct_names
     return names
 
 

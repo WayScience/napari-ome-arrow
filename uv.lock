@@ -1978,6 +1978,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-qt" },
     { name = "qtpy" },
+    { name = "vortex-data" },
 ]
 
 [package.metadata]
@@ -2006,6 +2007,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-qt", specifier = ">=4.4" },
     { name = "qtpy", specifier = ">=2.4" },
+    { name = "vortex-data" },
 ]
 
 [[package]]
