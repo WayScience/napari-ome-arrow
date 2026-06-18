@@ -1,14 +1,24 @@
 # Dependabot configuration
+# Note: there is no interaction between this
+# configuration and dependabot security updates.
 # https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuring-dependabot-version-updates#enabling-github-dependabot-version-updates
 # https://til.simonwillison.net/github/dependabot-python-setup
 
 version: 2
 updates:
+  # Cooldown docs:
+  # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+
   # Monitor uv dependencies
   - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       python-packages:
         patterns:
@@ -19,7 +29,21 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
+        patterns:
+          - "*"
+
+  # Monitor pre-commit hook versions (replaces the pre-commit-update hook)
+  - package-ecosystem: pre-commit
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      pre-commit-hooks:
         patterns:
           - "*"
