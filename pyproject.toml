@@ -57,18 +57,18 @@ dev = [
 ]
 
 [tool.setuptools]
-include-package-data = true
-package-data."*" = [ "*.yaml" ]
 packages.find.where = [ "src" ]
 packages.find.exclude = [ "*.tests", "*.tests.*", "tests*" ]
+include-package-data = true
+package-data."*" = [ "*.yaml" ]
 
 [tool.setuptools_scm]
-write_to = "src/napari_ome_arrow/_version.py"
 fallback_version = "0.0.1+nogit"
+write_to = "src/napari_ome_arrow/_version.py"
 
 [tool.black]
-line-length = 79
 target-version = [ "py310", "py311", "py312", "py313" ]
+line-length = 79
 
 [tool.ruff]
 line-length = 79
@@ -116,13 +116,13 @@ lint.ignore = [
   "UP007",
 ]
 
+[tool.vulture]
+paths = [ "src/napari_ome_arrow", "tests" ]
+min_confidence = 90
+
 [tool.pytest]
 ini_options.minversion = "6.0"
+ini_options.testpaths = [ "tests" ]
 ini_options.addopts = [ "-ra", "--showlocals", "--strict-markers", "--strict-config" ]
 ini_options.xfail_strict = true
 ini_options.log_cli_level = "INFO"
-ini_options.testpaths = [ "tests" ]
-
-[tool.vulture]
-min_confidence = 90
-paths = [ "src/napari_ome_arrow", "tests" ]
