@@ -13,6 +13,7 @@ It provides a single, explicit pathway for loading OME-style bioimage data:
 
 - **OME-TIFF** (`.ome.tif`, `.ome.tiff`, `.tif`, `.tiff`)
 - **OME-Zarr** (`.ome.zarr`, `.zarr` stores and URLs)
+- **OME-Arrow datasets** (`.ome-arrow` directories)
 - **OME-Parquet** (`.ome.parquet`, `.parquet`, `.pq`)
 - **OME-Vortex** (`.ome.vortex`, `.vortex`)
 - **Bio-Formats–style stack patterns** (paths containing `<`, `>`, or `*`)

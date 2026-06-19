@@ -12,9 +12,11 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from ome_arrow import from_numpy, write_ome_arrow_dataset
 
 import napari_ome_arrow._reader as reader_mod
 from napari_ome_arrow import napari_get_reader
+from napari_ome_arrow._reader_omearrow import _find_ome_parquet_columns
 
 DATA_ROOT = Path("tests/data").resolve()
 
@@ -147,6 +149,60 @@ def test_reader_labels_mode_ome_sources(path: str):
 
 
 # --------------------------------------------------------------------- #
+#  Typed OME-Arrow dataset behavior
+# --------------------------------------------------------------------- #
+
+
+def test_reader_ome_arrow_dataset_emits_one_layer_per_image(tmp_path: Path):
+    """Typed OME-Arrow datasets should load each image as a layer."""
+    path = tmp_path / "images.ome-arrow"
+    images = [
+        np.arange(24, dtype=np.uint16).reshape(1, 1, 2, 3, 4),
+        np.full((1, 1, 2, 3, 4), 7, dtype=np.uint16),
+    ]
+    write_ome_arrow_dataset(images, path)
+
+    with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
+        reader = napari_get_reader(str(path))
+        assert callable(reader)
+        layers = reader(str(path))
+
+    assert len(layers) == 2
+    for expected, (data, add_kwargs, layer_type) in zip(
+        images, layers, strict=True
+    ):
+        assert layer_type == "image"
+        assert add_kwargs["channel_axis"] == 1
+        np.testing.assert_array_equal(data, expected)
+
+
+def test_reader_ome_arrow_dataset_infers_labels_from_metadata(tmp_path: Path):
+    """Dataset image_type metadata should select a labels layer."""
+    path = tmp_path / "labels.ome-arrow"
+    image = np.arange(24, dtype=np.uint16).reshape(1, 1, 2, 3, 4)
+    write_ome_arrow_dataset([image], path)
+
+    images_path = path / "images.parquet"
+    images = pq.read_table(images_path)
+    image_types = pa.array(["labels"], type=pa.string())
+    images = images.set_column(
+        images.schema.get_field_index("image_type"),
+        "image_type",
+        image_types,
+    )
+    pq.write_table(images, images_path)
+
+    with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", None):
+        layers = reader_mod.reader_function(str(path))
+
+    assert len(layers) == 1
+    data, add_kwargs, layer_type = layers[0]
+    assert layer_type == "labels"
+    assert "channel_axis" not in add_kwargs
+    np.testing.assert_array_equal(data, image[:, 0, ...])
+
+
+# --------------------------------------------------------------------- #
 #  .npy fallback behavior
 # --------------------------------------------------------------------- #
 
@@ -198,6 +254,61 @@ def test_reader_npy_labels_mode(tmp_path: Path):
 # --------------------------------------------------------------------- #
 #  OME-Parquet: multi-row grid behavior
 # --------------------------------------------------------------------- #
+
+
+def test_find_ome_parquet_columns_ignores_unrelated_structs():
+    """Only structs with the required OME-Arrow fields are candidates."""
+    unrelated = pa.field(
+        "metadata", pa.struct([pa.field("name", pa.string())])
+    )
+    required = [
+        pa.field(name, pa.null())
+        for name in sorted(
+            {
+                "type",
+                "version",
+                "id",
+                "name",
+                "acquisition_datetime",
+                "pixels_meta",
+                "planes",
+                "masks",
+            }
+        )
+    ]
+    ome_arrow = pa.field("ome_arrow", pa.struct(required))
+
+    assert _find_ome_parquet_columns(pa.schema([unrelated, ome_arrow])) == [
+        "ome_arrow"
+    ]
+
+
+def test_reader_current_nested_ome_arrow_table(tmp_path: Path):
+    """Current canonical nested records should load one layer per row."""
+    path = tmp_path / "current.ome.parquet"
+    images = [
+        np.arange(12, dtype=np.uint16).reshape(1, 1, 1, 3, 4),
+        np.full((1, 1, 1, 3, 4), 9, dtype=np.uint16),
+    ]
+    scalars = [
+        from_numpy(image, name=f"image-{idx}")
+        for idx, image in enumerate(images)
+    ]
+    records = pa.array(
+        [scalar.as_py() for scalar in scalars], type=scalars[0].type
+    )
+    pq.write_table(pa.table({"ome_arrow": records}), path)
+
+    with temporary_env_var("NAPARI_OME_ARROW_LAYER_TYPE", "image"):
+        layers = reader_mod.reader_function(str(path))
+
+    assert len(layers) == 2
+    for expected, (data, add_kwargs, layer_type) in zip(
+        images, layers, strict=True
+    ):
+        assert layer_type == "image"
+        assert add_kwargs["channel_axis"] == 1
+        np.testing.assert_array_equal(data, expected)
 
 
 def test_reader_prompts_for_stack_pattern_with_multiple_files(
