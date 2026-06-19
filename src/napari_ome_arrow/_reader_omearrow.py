@@ -253,10 +253,7 @@ def _read_ome_arrow_dataset_images(
         arr = dataset.read_image(image_id, return_type="numpy")
         meta = dataset.image_metadata(image_id)
         name = str(meta.get("name") or image_id)
-        if len(image_ids) > 1:
-            name = f"{Path(src).name}[{name}]"
-        else:
-            name = Path(src).name
+        name = f"{Path(src).name}[{name}]"
         layers.append(_layer_from_array(arr, mode=mode, name=name))
 
     if len(layers) > 1:

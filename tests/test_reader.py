@@ -198,6 +198,7 @@ def test_reader_ome_arrow_dataset_infers_labels_from_metadata(tmp_path: Path):
     assert len(layers) == 1
     data, add_kwargs, layer_type = layers[0]
     assert layer_type == "labels"
+    assert add_kwargs["name"] == "labels.ome-arrow[image-00000]"
     assert "channel_axis" not in add_kwargs
     np.testing.assert_array_equal(data, image[:, 0, ...])
 
