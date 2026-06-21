@@ -10,9 +10,8 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
-from ome_arrow.core import OMEArrow
+from ome_arrow import OMEArrow, OMEArrowDataset, from_ome_parquet
 from ome_arrow.ingest import from_stack_pattern_path
-from ome_arrow.meta import OME_ARROW_STRUCT
 
 from ._reader_napari import _as_labels, _enable_grid, _maybe_set_viewer_3d
 from ._reader_stack import (
@@ -23,35 +22,75 @@ from ._reader_stack import (
 )
 from ._reader_types import LayerData
 
+_OME_ARROW_REQUIRED_FIELDS = {
+    "type",
+    "version",
+    "id",
+    "name",
+    "acquisition_datetime",
+    "pixels_meta",
+    "planes",
+    "masks",
+}
 
-def _find_ome_parquet_columns(table: pa.Table) -> list[str]:
+
+def _find_ome_parquet_columns(
+    source: pa.Table | pa.Schema,
+) -> list[str]:
     """Find Parquet columns matching the OME-Arrow schema.
 
     Args:
-        table: Parquet table to scan.
+        source: Parquet table or Arrow schema to scan.
 
     Returns:
-        Column names that match the OME-Arrow struct schema.
+        Struct column names containing the required OME-Arrow fields.
     """
-    import pyarrow as pa
+    schema = source.schema if isinstance(source, pa.Table) else source
+    return [
+        field.name
+        for field in schema
+        if pa.types.is_struct(field.type)
+        and _OME_ARROW_REQUIRED_FIELDS.issubset(
+            child.name for child in field.type
+        )
+    ]
 
-    # Prefer struct columns that exactly mirror the OME-Arrow schema.
-    expected_fields = {f.name for f in OME_ARROW_STRUCT}
-    names: list[str] = []
-    struct_names: list[str] = []
-    for name, col in zip(table.column_names, table.columns, strict=False):
-        if not pa.types.is_struct(col.type):
-            continue
-        struct_names.append(name)
-        if {f.name for f in col.type} == expected_fields:
-            names.append(name)
 
-    # Compatibility fallback: some ome-arrow/pyarrow combinations expose
-    # equivalent struct payloads with non-canonical field layout. In that case,
-    # treat struct columns as candidates and let row decoding decide.
-    if not names and struct_names:
-        return struct_names
-    return names
+def _looks_like_ome_arrow_dataset(src: str) -> bool:
+    """Check whether a path looks like a typed OME-Arrow dataset directory."""
+    path = Path(src)
+    if not path.exists() or not path.is_dir():
+        return False
+    return (path / "images.parquet").exists() and (
+        path / "chunks.parquet"
+    ).exists()
+
+
+def _layer_from_array(
+    arr: np.ndarray,
+    *,
+    mode: str,
+    name: str,
+) -> LayerData:
+    """Convert a TCZYX-like array into a napari layer tuple."""
+    add_kwargs: dict[str, Any] = {"name": name}
+    if mode == "image":
+        if arr.ndim >= 5:
+            add_kwargs["channel_axis"] = 1  # TCZYX
+        elif arr.ndim == 4:
+            add_kwargs["channel_axis"] = 0  # CZYX
+        layer_type = "image"
+    else:
+        if arr.ndim == 5:
+            arr = arr[:, 0, ...]
+        elif arr.ndim == 4:
+            arr = arr[0, ...]
+        arr = _as_labels(arr)
+        add_kwargs.setdefault("opacity", 0.7)
+        layer_type = "labels"
+
+    _maybe_set_viewer_3d(arr)
+    return arr, add_kwargs, layer_type
 
 
 def _read_vortex_scalar(src: str) -> pa.StructScalar:
@@ -68,7 +107,7 @@ def _read_vortex_scalar(src: str) -> pa.StructScalar:
     """
     # Delegate Vortex parsing to ome-arrow, which handles the file format details.
     try:
-        from ome_arrow.ingest import from_ome_vortex
+        from ome_arrow import from_ome_vortex
     except Exception as exc:
         raise ImportError(
             "OME-Vortex support requires ome-arrow with vortex support and the "
@@ -119,7 +158,7 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
         return None
 
     try:
-        from ome_arrow.ingest import from_ome_vortex
+        from ome_arrow import from_ome_vortex
     except Exception:
         return None
 
@@ -164,27 +203,13 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
             )
             return
 
-        # Layer metadata uses row index for unique naming.
-        add_kwargs: dict[str, Any] = {
-            "name": f"{Path(src).name}[{selected}][row {idx}]"
-        }
-        if mode == "image":
-            if arr.ndim >= 5:
-                add_kwargs["channel_axis"] = 1  # TCZYX
-            elif arr.ndim == 4:
-                add_kwargs["channel_axis"] = 0  # CZYX
-            layer_type = "image"
-        else:
-            if arr.ndim == 5:
-                arr = arr[:, 0, ...]
-            elif arr.ndim == 4:
-                arr = arr[0, ...]
-            arr = _as_labels(arr)
-            add_kwargs.setdefault("opacity", 0.7)
-            layer_type = "labels"
-
-        _maybe_set_viewer_3d(arr)
-        layers.append((arr, add_kwargs, layer_type))
+        layers.append(
+            _layer_from_array(
+                arr,
+                mode=mode,
+                name=f"{Path(src).name}[{selected}][row {idx}]",
+            )
+        )
 
     _append_layer(0, first)
     _append_layer(1, second)
@@ -213,6 +238,29 @@ def _read_vortex_rows(src: str, mode: str) -> list[LayerData] | None:
     return layers or None
 
 
+def _read_ome_arrow_dataset_images(
+    src: str,
+    mode: str,
+) -> list[LayerData] | None:
+    """Read a typed OME-Arrow dataset directory as one layer per image."""
+    if not _looks_like_ome_arrow_dataset(src):
+        return None
+
+    dataset = OMEArrowDataset(src)
+    layers: list[LayerData] = []
+    image_ids = dataset.image_ids
+    for image_id in image_ids:
+        arr = dataset.read_image(image_id, return_type="numpy")
+        meta = dataset.image_metadata(image_id)
+        name = str(meta.get("name") or image_id)
+        name = f"{Path(src).name}[{name}]"
+        layers.append(_layer_from_array(arr, mode=mode, name=name))
+
+    if len(layers) > 1:
+        _enable_grid(len(layers))
+    return layers or None
+
+
 def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
     """Read multi-row OME-Parquet data as a layer grid.
 
@@ -228,15 +276,16 @@ def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
         return None
 
     try:
-        import pyarrow as pa
         import pyarrow.parquet as pq
     except Exception:
         return None
 
-    # Read all rows; per-row layers are assembled below.
-    table = pq.read_table(src)
-    ome_cols = _find_ome_parquet_columns(table)
-    if not ome_cols or table.num_rows <= 1:
+    parquet_file = pq.ParquetFile(src)
+    metadata = parquet_file.metadata
+    if metadata is None:
+        return None
+    ome_cols = _find_ome_parquet_columns(parquet_file.schema_arrow)
+    if not ome_cols or metadata.num_rows <= 1:
         return None
 
     # Column override for multi-struct tables.
@@ -252,13 +301,16 @@ def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
     else:
         selected = ome_cols[0]
 
-    column = table[selected]
     layers: list[LayerData] = []
 
-    for idx in range(table.num_rows):
+    for idx in range(metadata.num_rows):
         try:
-            record = column.slice(idx, 1).to_pylist()[0]
-            scalar = pa.scalar(record, type=OME_ARROW_STRUCT)
+            scalar = from_ome_parquet(
+                src,
+                column_name=selected,
+                row_index=idx,
+                strict_schema=False,
+            )
             arr = OMEArrow(scalar).export(
                 how="numpy", dtype=np.uint16, strict=False
             )
@@ -269,26 +321,13 @@ def _read_parquet_rows(src: str, mode: str) -> list[LayerData] | None:
             )
             continue
 
-        add_kwargs: dict[str, Any] = {
-            "name": f"{Path(src).name}[{selected}][row {idx}]"
-        }
-        if mode == "image":
-            if arr.ndim >= 5:
-                add_kwargs["channel_axis"] = 1  # TCZYX
-            elif arr.ndim == 4:
-                add_kwargs["channel_axis"] = 0  # CZYX
-            layer_type = "image"
-        else:
-            if arr.ndim == 5:
-                arr = arr[:, 0, ...]
-            elif arr.ndim == 4:
-                arr = arr[0, ...]
-            arr = _as_labels(arr)
-            add_kwargs.setdefault("opacity", 0.7)
-            layer_type = "labels"
-
-        _maybe_set_viewer_3d(arr)
-        layers.append((arr, add_kwargs, layer_type))
+        layers.append(
+            _layer_from_array(
+                arr,
+                mode=mode,
+                name=f"{Path(src).name}[{selected}][row {idx}]",
+            )
+        )
 
     if layers:
         _enable_grid(len(layers))
@@ -329,6 +368,7 @@ def _read_one(
         and p.is_dir()
         and p.suffix.lower() == ".zarr"
     )
+    looks_ome_arrow_dataset = _looks_like_ome_arrow_dataset(src)
     looks_parquet = s.endswith(
         (".ome.parquet", ".parquet", ".pq")
     ) or p.suffix.lower() in {
@@ -357,7 +397,13 @@ def _read_one(
         or looks_parquet
         or looks_tiff
         or looks_vortex
+        or looks_ome_arrow_dataset
     ):
+        if looks_ome_arrow_dataset:
+            dataset = OMEArrowDataset(src)
+            arr = dataset.read_image(return_type="numpy")
+            return _layer_from_array(arr, mode=mode, name=p.name)
+
         scalar = None
         if looks_vortex:
             # Vortex needs ome-arrow's ingest helper to produce a typed scalar.

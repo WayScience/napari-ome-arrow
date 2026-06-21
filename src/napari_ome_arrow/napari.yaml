@@ -8,6 +8,8 @@ contributions:
   readers:
     - command: napari-ome-arrow.get_reader
       filename_patterns:
+        # Typed OME-Arrow dataset directories
+        - "*.ome-arrow"
         # OME-Parquet
         - "*.ome.parquet"
         - "*.parquet"

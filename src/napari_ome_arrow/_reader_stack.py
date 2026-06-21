@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from ome_arrow.core import OMEArrow
+from ome_arrow import OMEArrow
 from ome_arrow.ingest import from_stack_pattern_path
 
 
@@ -37,6 +37,10 @@ def _collect_stack_files(
             candidate.exists()
             and candidate.is_dir()
             and candidate.suffix.lower() not in {".zarr", ".ome.zarr"}
+            and not (
+                (candidate / "images.parquet").exists()
+                and (candidate / "chunks.parquet").exists()
+            )
         ):
             files = sorted(p for p in candidate.iterdir() if p.is_file())
             if len(files) > 1:

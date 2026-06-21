@@ -27,6 +27,7 @@ from ._reader_napari import (  # noqa: F401
     _strip_channel_axis,
 )
 from ._reader_omearrow import (  # noqa: F401
+    _read_ome_arrow_dataset_images,
     _read_one,
     _read_parquet_rows,
     _read_vortex_rows,
@@ -55,6 +56,7 @@ __all__ = [
     "_maybe_set_viewer_3d",
     "_strip_channel_axis",
     "_read_one",
+    "_read_ome_arrow_dataset_images",
     "_read_parquet_rows",
     "_read_vortex_rows",
     "_channel_names_from_pattern",
@@ -320,6 +322,11 @@ def reader_function(
 
     for src in paths:
         try:
+            dataset_layers = _read_ome_arrow_dataset_images(src, mode)
+            if dataset_layers is not None:
+                layers.extend(dataset_layers)
+                continue
+
             parquet_layers = _read_parquet_rows(src, mode)
             if parquet_layers is not None:
                 layers.extend(parquet_layers)

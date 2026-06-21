@@ -1980,7 +1980,7 @@ requires-dist = [
     { name = "napari", extras = ["pyqt6"], marker = "extra == 'pyqt6'" },
     { name = "napari", extras = ["pyside6"], marker = "extra == 'pyside6'" },
     { name = "numpy" },
-    { name = "ome-arrow", specifier = ">=0.0.3" },
+    { name = "ome-arrow", specifier = ">=0.0.10" },
     { name = "pyqt6", marker = "extra == 'pyqt6'", specifier = ">=6.6" },
     { name = "pyside6", marker = "extra == 'pyside6'", specifier = ">=6.6" },
     { name = "qtpy", specifier = ">=2.4" },
