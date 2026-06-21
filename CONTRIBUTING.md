@@ -8,9 +8,9 @@ If you are stuck, please feel free to ask any questions or ask for help.
 
 ## Code of conduct
 
-This project is governed by our [code of conduct](code_of_conduct.md). By participating, you are expected to uphold this code.
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to community leaders responsible for enforcement.
+This project is governed by our [code of conduct](code_of_conduct.md).
+By participating, you are expected to uphold this code.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to community leaders responsible for enforcement.
 Please open a [new security advisory notice](https://github.com/wayscience/ome-arrow/security/advisories/new) (using defaults or "n/a" where unable to fill in the form) to privately notify us of any incidents of this nature.
 
 ## Development

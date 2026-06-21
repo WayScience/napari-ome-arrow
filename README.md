@@ -7,8 +7,7 @@
 [![npe2](https://img.shields.io/badge/plugin-npe2-blue?link=https://napari.org/stable/plugins/index.html)](https://napari.org/stable/plugins/index.html)
 [![Software DOI badge](https://zenodo.org/badge/DOI/10.5281/zenodo.17613571.svg)](https://doi.org/10.5281/zenodo.17613571)
 
-`napari-ome-arrow` opens OME image data in [napari] using the
-[OME-Arrow](https://github.com/wayscience/ome-arrow) library.
+`napari-ome-arrow` opens OME image data in [napari] using the [OME-Arrow](https://github.com/wayscience/ome-arrow) library.
 
 ## Supported inputs
 
@@ -20,8 +19,7 @@
 - Numbered image stacks and stack patterns containing `<`, `>`, or `*`
 - NumPy arrays (`*.npy`)
 
-Multi-image OME-Arrow datasets and multi-row nested tables are loaded as
-multiple napari layers.
+Multi-image OME-Arrow datasets and multi-row nested tables are loaded as multiple napari layers.
 
 ## Installation
 
@@ -47,16 +45,16 @@ pip install "napari-ome-arrow[vortex]"
 
 ## Usage
 
-Open napari, then drag a supported file or directory into the viewer. You can
-also start napari with a path:
+Open napari, then drag a supported file or directory into the viewer.
+You can also start napari with a path:
 
 ```bash
 napari sample.ome.parquet
 napari images.ome-arrow
 ```
 
-The plugin loads data as either image or labels layers. It chooses the layer
-type in this order:
+The plugin loads data as either image or labels layers.
+It chooses the layer type in this order:
 
 1. `NAPARI_OME_ARROW_LAYER_TYPE`, when set to `image` or `labels`.
 1. OME-Arrow `image_type` metadata, when available.
@@ -84,9 +82,9 @@ napari "stack/z<000-120>.tif"
 | `NAPARI_OME_ARROW_VORTEX_COLUMN`  | Select an OME-Arrow struct column in Vortex  |
 | `NAPARI_OME_ARROW_STACK_SCALE`    | Set stack spacing as `Z,Y,X` or `T,C,Z,Y,X`  |
 
-Multiple rows are displayed in napari's grid view. Image stacks with a real Z
-dimension open in 3D. If stack spacing is missing, the plugin can prompt for it
-when a Qt application is available.
+Multiple rows are displayed in napari's grid view.
+Image stacks with a real Z dimension open in 3D.
+If stack spacing is missing, the plugin can prompt for it when a Qt application is available.
 
 ## Development
 
@@ -94,7 +92,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and test instructions.
 
 ## License
 
-This project uses the BSD 3-Clause License. See [LICENSE](LICENSE).
+This project uses the BSD 3-Clause License.
+See [LICENSE](LICENSE).
 
 Report problems through the [issue tracker].
 

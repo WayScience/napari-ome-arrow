@@ -56,7 +56,7 @@ def _find_ome_parquet_columns(
     ]
 
 
-def _looks_ome_arrow_dataset(src: str) -> bool:
+def _looks_like_ome_arrow_dataset(src: str) -> bool:
     """Check whether a path looks like a typed OME-Arrow dataset directory."""
     path = Path(src)
     if not path.exists() or not path.is_dir():
@@ -243,7 +243,7 @@ def _read_ome_arrow_dataset_images(
     mode: str,
 ) -> list[LayerData] | None:
     """Read a typed OME-Arrow dataset directory as one layer per image."""
-    if not _looks_ome_arrow_dataset(src):
+    if not _looks_like_ome_arrow_dataset(src):
         return None
 
     dataset = OMEArrowDataset(src)
@@ -368,7 +368,7 @@ def _read_one(
         and p.is_dir()
         and p.suffix.lower() == ".zarr"
     )
-    looks_ome_arrow_dataset = _looks_ome_arrow_dataset(src)
+    looks_ome_arrow_dataset = _looks_like_ome_arrow_dataset(src)
     looks_parquet = s.endswith(
         (".ome.parquet", ".parquet", ".pq")
     ) or p.suffix.lower() in {

@@ -9,7 +9,10 @@ from typing import Any
 from ome_arrow import OMEArrow, OMEArrowDataset
 from ome_arrow.ingest import from_stack_pattern_path
 
-from ._reader_omearrow import _looks_ome_arrow_dataset, _read_vortex_scalar
+from ._reader_omearrow import (
+    _looks_like_ome_arrow_dataset,
+    _read_vortex_scalar,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -133,7 +136,7 @@ def _infer_layer_mode_from_source(
         ".tif",
         ".tiff",
     }
-    looks_ome_arrow_dataset = _looks_ome_arrow_dataset(src)
+    looks_ome_arrow_dataset = _looks_like_ome_arrow_dataset(src)
     if not (
         looks_stack
         or looks_zarr
@@ -207,7 +210,7 @@ def _looks_like_ome_source(path_str: str) -> bool:
         ".tiff",
     }
     looks_npy = s.endswith(".npy")
-    looks_ome_arrow_dataset = _looks_ome_arrow_dataset(path_str)
+    looks_ome_arrow_dataset = _looks_like_ome_arrow_dataset(path_str)
     looks_dir_stack = False
     if p.exists() and p.is_dir() and not looks_zarr:
         try:

@@ -31,8 +31,13 @@ repos:
     rev: 1.0.0
     hooks:
     -   id: mdformat
+        args: [ --wrap=keep ]
         additional_dependencies:
         -   mdformat-gfm
+-   repo: https://github.com/CU-DBMI/onesentence
+    rev: v0.1.4
+    hooks:
+    -   id: fix
 -   repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:
