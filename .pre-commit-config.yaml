@@ -9,7 +9,7 @@ repos:
     -   id: check-yaml
     -   id: detect-private-key
 -   repo: https://github.com/tox-dev/pyproject-fmt
-    rev: "v2.24.0"
+    rev: "v2.28.1"
     hooks:
     -   id: pyproject-fmt
 -   repo: https://github.com/citation-file-format/cffconvert
@@ -17,7 +17,7 @@ repos:
     hooks:
     -   id: validate-cff
 -   repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: v2.4.3
     hooks:
     -   id: codespell
         exclude: |
@@ -35,7 +35,7 @@ repos:
         additional_dependencies:
         -   mdformat-gfm
 -   repo: https://github.com/CU-DBMI/onesentence
-    rev: v0.1.4
+    rev: v0.1.5
     hooks:
     -   id: fix
 -   repo: https://github.com/adrienverge/yamllint
@@ -44,7 +44,7 @@ repos:
     -   id: yamllint
         exclude: pre-commit-config.yaml
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.15.17"
+    rev: "v0.16.4"
     hooks:
     -   id: ruff-format
     -   id: ruff-check
