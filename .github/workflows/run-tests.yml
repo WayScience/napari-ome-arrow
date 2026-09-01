@@ -13,16 +13,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       # checks out the repo
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.1
       # run pre-commit
       - name: Python setup
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
       - name: Install Windows OpenGL
-        uses: pyvista/setup-headless-display-action@v4.3
+        uses: pyvista/setup-headless-display-action@v5.0
         with:
           qt: true
           wm: herbstluftwm
@@ -40,15 +40,15 @@ jobs:
       OS: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.3
+        uses: actions/checkout@v7.0.1
       - name: Python setup
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python_version }}
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
       - name: Install Windows OpenGL
-        uses: pyvista/setup-headless-display-action@v4.3
+        uses: pyvista/setup-headless-display-action@v5.0
         with:
           qt: true
           wm: herbstluftwm
