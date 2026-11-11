@@ -1,0 +1,7 @@
+# actionlint 1.7.12 does not yet recognize the ubuntu-26.04 GitHub-hosted
+# runner label (GA since 2026-09-17). Declare it here as a validation-only
+# exception so lint does not flag a valid runner image; it is not an actual
+# self-hosted runner.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
